@@ -1,0 +1,44 @@
+[project]
+name = "weedata"
+version = "0.1.0"
+description = "an ORM/ODM for Google Cloud Datastore/MongoDB, featuring a compatible interface with Peewee."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.6"
+keywords = ["weedata", "peewee", "ORM", "ODM", "google cloud datastore", "MongoDB"]
+dependencies = [
+  "google-cloud-datastore",
+  "pymongo"
+]
+authors = [
+    { name="cdhigh", email="chsqyuan@gmail.com" },
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    'Intended Audience :: Developers',
+    'Operating System :: OS Independent',
+    'Natural Language :: English',
+    'Topic :: Database',
+    'Topic :: Database :: Front-Ends',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Topic :: Software Development :: Libraries'
+]
+
+[project.urls]
+Homepage = "https://github.com/cdhigh/weedata"
+Issues = "https://github.com/cdhigh/weedata/issues"
+
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
