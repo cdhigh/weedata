@@ -57,11 +57,21 @@ class TestUpdating(ModelTestCase):
         for t in tweets:
             self.t_ids.append(Tweet.insert({'user_id': id_, 'content': t[0], 'liked': t[1], 'disliked': t[2]}).execute())
 
+    def test_get_upate(self):
+        t = Tweet.select(Tweet.content, 'liked').where(Tweet.content == 'cloud').first()
+        self.assertEqual(t.disliked, None)
+        self.assertEqual(t.liked, 40)
+        self.assertEqual(t.content, 'cloud')
+        t.content = 'CLOUD'
+        t.save()
+        t1 = Tweet.get_by_id(t.id)
+        self.assertEqual(t1.content, 'CLOUD')
+
     def test_upate(self):
-        User.update({User.times: User.times + 10}).where(User.name == 'user2').execute()
+        User.update({User.times: (User.times + 10) * 2}).where(User.name == 'user2').execute()
         user = User.get(User.name == 'user2')
-        self.assertEqual(user.times, 25)
-        
+        self.assertEqual(user.times, 50)
+
         with database.atomic():
             User.update(times=1).where(User.name == 'user5').execute()
             user = User.get(User.name == 'user5')
@@ -72,4 +82,16 @@ class TestUpdating(ModelTestCase):
             user.save()
             user = User.get(User.name == 'user5')
             self.assertEqual(user.email, 'newemail@g.com')
+
+    def test_complicate_update(self):
+        (Tweet.update({Tweet.liked: ((Tweet.liked / Tweet.disliked) + 1) * 3 }).
+            where(Tweet.content.in_(['AI', 'backend'])).execute())
+        ts = list(Tweet.select().where((Tweet.content == 'AI') | (Tweet.content == 'backend')).execute())
+        contents = set([t.content for t in ts])
+        liked = set([t.liked for t in ts])
+        disliked = set([t.disliked for t in ts])
+        self.assertEqual(contents, set(['AI', 'backend']))
+        self.assertEqual(liked, set([18, 33]))
+        self.assertEqual(disliked, set([10, 2]))
+        
         

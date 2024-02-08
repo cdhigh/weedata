@@ -4,7 +4,7 @@
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 import copy
-from .fields import Field, FieldDescriptor, PrimaryKeyField
+from .fields import Field, FieldDescriptor, PrimaryKeyField, DoesNotExist
 from .queries import QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder
 
 class BaseModel(type):
@@ -69,9 +69,6 @@ class ModelOptions(object):
             if field.default is not None:
                 self.defaults[field] = field.default
 
-    def get_default_dict(self):
-        return self.defaults
-
 class Model(object, metaclass=BaseModel):
     def __init__(self, **kwargs):
         self._key = kwargs.get('_key', None)
@@ -124,7 +121,7 @@ class Model(object, metaclass=BaseModel):
     def get_or_none(cls, query=None):
         try:
             return cls.get(query)
-        except DoesNotExist:
+        except:
             return None
 
     @classmethod

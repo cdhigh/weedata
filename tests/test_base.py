@@ -8,13 +8,11 @@ from unittest import mock
 from weedata import *
 
 logger = logging.getLogger('weedata')
-
-BACKEND = os.environ.get('WEEDATA_TEST_BACKEND', 'mongodb').lower()
 VERBOSITY = int(os.environ.get('WEEDATA_TEST_VERBOSITY') or 1)
 SLOW_TESTS = bool(os.environ.get('WEEDATA_SLOW_TESTS'))
 
 def new_connection(**kwargs):
-    if BACKEND == 'mongodb':
+    if os.getenv('WEEDATA_TEST_BACKEND', 'mongodb') == 'mongodb':
         return MongoDbClient("weedata_test", "mongodb://localhost:27017/")
     else:
         return DatastoreClient(project="kindleear")
@@ -224,7 +222,7 @@ def slow_test():
     return decorator
 
 def requires_mongodb(method):
-    return skip_unless(BACKEND == 'mongodb', 'requires mongodb')(method)
+    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND', 'mongodb') == 'mongodb', 'requires mongodb')(method)
 
 def requires_datastore(method):
-    return skip_unless(BACKEND == 'datastore', 'requires datastore')(method)
+    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND', 'mongodb') == 'datastore', 'requires datastore')(method)

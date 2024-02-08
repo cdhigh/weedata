@@ -98,6 +98,13 @@ class TestQueryExecution(ModelTestCase):
         user = User.select().where((User.name != 'user1') & (User.name != 'user2')).first()
         self.assertTrue((user.name != 'user1') and (user.name != 'user2'))
 
+        users = list(User.select().where((User.name == 'user1') | (User.name == 'user2') | (User.name == 'user3')))
+        names = set([u.name for u in users])
+        self.assertTrue(names ==  set(['user1', 'user2', 'user3']))
+
+        users = list(User.select().where(((User.name == 'user1') | (User.name == 'user2')) & (User.name == 'user3')))
+        self.assertTrue(not users)
+
         user = User.select().where(User.name != 'user1').where(User.name != 'user2').first()
         self.assertTrue((user.name != 'user1') and (user.name != 'user2'))
 
@@ -105,8 +112,8 @@ class TestQueryExecution(ModelTestCase):
         self.assertEqual(user, None)
 
         users = User.select().where(((User.name != 'user1') & (User.name != 'user2') & (User.name != 'user3')))
-        names = [u.name for u in users]
-        self.assertTrue(('user1' not in names) and ('user2' not in names) and ('user3' not in names))
+        names = set([u.name for u in users])
+        self.assertTrue(names ==  set(['user4', 'user5', 'user6']))
 
     #@requires_mongodb
     def test_select_or(self):

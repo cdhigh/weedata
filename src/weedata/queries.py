@@ -3,7 +3,7 @@
 #an ORM/ODM for Google Cloud Datastore/MongoDB, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
-
+import re
 from collections import defaultdict
 from .fields import Field, PrimaryKeyField, arith_op, UpdateExpr, Filter
 
@@ -151,9 +151,25 @@ class UpdateQueryBuilder(QueryBuilder):
                 field = get_field(field_name, None)
                 if field:
                     if isinstance(value, UpdateExpr):
-                        value = eval(str(value))
+                        value = self.my_safe_eval(str(value), {}, locals())
                     setattr(e, field_name, value)
             self.client.update_one(e)
+
+    @classmethod
+    def my_safe_eval(cls, txt, g_dict, l_dict):
+        code = compile(txt, '<user input>', 'eval')
+        reason = None
+        banned = ('eval', 'compile', 'exec', 'getattr', 'hasattr', 'setattr', 'delattr',
+            'classmethod', 'globals', 'help', 'input', 'isinstance', 'issubclass', 'locals',
+            'open', 'print', 'property', 'staticmethod', 'vars', 'os')
+        for name in code.co_names:
+            if re.search(r'^__\S*__$', name):
+                reason = 'dunder attributes not allowed'
+            elif name in banned:
+                reason = 'arbitrary code execution not allowed'
+            if reason:
+                raise NameError(f'{name} not allowed : {reason}')
+        return eval(code, g_dict, l_dict)
 
     def __repr__(self):
         return f"<UpdateQueryBuilder filters: {self._filters}>"
