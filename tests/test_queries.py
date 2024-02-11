@@ -59,6 +59,14 @@ class TestQueryExecution(ModelTestCase):
         for t in tweets:
             self.t_ids.append(Tweet.insert({'user_id': id_, 'content': t[0], 'liked': t[1], 'disliked': t[2]}).execute())
 
+    def test_model_get(self):
+        user = User.get(self.ids[5])
+        self.assertEqual(user.name, 'user6')
+        user = User.get(name='user6')
+        self.assertEqual(user.name, 'user6')
+        user = User.get(User.name=='user6')
+        self.assertEqual(user.name, 'user6')
+
     def test_selection(self):
         query = list(User.select())
         self.assertEqual(len(query), 6)
@@ -177,4 +185,5 @@ class TestQueryExecution(ModelTestCase):
     def test_get_by_obj_id(self):
         user = User.get_by_key(ObjectId(self.ids[5]))
         self.assertEqual(user.name, 'user6')
+
         

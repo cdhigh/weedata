@@ -118,7 +118,9 @@ class QueryBuilder:
 
 class DeleteQueryBuilder(QueryBuilder):
     def execute(self):
-        self.client.delete_many([e for e in super().execute()])
+        models = [m for m in super().execute()]
+        self.client.delete_many(models)
+        return len(models)
 
     def __repr__(self):
         return f"<DeleteQueryBuilder filters: {self._filters}>"
@@ -145,15 +147,19 @@ class UpdateQueryBuilder(QueryBuilder):
         self._update = to_update #is a dict
 
     def execute(self):
+        cnt = 0
         for e in super().execute():
             get_field = e._meta.fields.get
             for field_name, value in self._update.items():
                 field = get_field(field_name, None)
                 if field:
                     if isinstance(value, UpdateExpr):
+                        #value = eval(str(value))
                         value = self.my_safe_eval(str(value), {}, locals())
                     setattr(e, field_name, value)
             self.client.update_one(e)
+            cnt += 1
+        return cnt
 
     @classmethod
     def my_safe_eval(cls, txt, g_dict, l_dict):

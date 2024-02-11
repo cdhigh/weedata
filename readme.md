@@ -113,7 +113,7 @@ uncle_bob.save()
 You can also add a person by calling the create() method, which returns a model instance. The insert_many() function is a convenient method for adding many data at once:
 
 ```
-grandma = Person.create(name='Grandma', birthday=date(1935, 3, 1))
+grandma = Person.create(name='grandma', birthday=date(1935, 3, 1))
 Person.insert_many([{'name':'Herb', 'birthday':date(1950, 5, 5)}, {'name':'Adam', 'birthday':date(1990, 9, 1)}])
 ```
 
@@ -131,10 +131,11 @@ Here we will change Grandma's name and then save the changes in the database.
 Or you can use an update statement that supports all standard arithmetic operators:  
 
 ```
-grandma.name = 'Grandma L.'
+grandma.name = 'Grandma'
 grandma.save()  # Update grandma's name in the database.
 
 Person.update({Person.name: 'Grandma L.'}).where(Person.name == 'Grandma').execute() #Changing to other name
+Person.update(name='Grandma').where(Person.name == 'Grandma').execute() #Changing to other name
 Person.update({Person.name: 'Dear. ' + Person.name}).where(Person.birthday > date(1950, 5, 5)).execute() #Adding a title of respect before someone's name
 # update statement supports: +, -, *, /, //, %, **, <<, >>, &, |, ^
 ```
@@ -159,16 +160,17 @@ db.drop_tables([Person, Message])
 Let's retrieve Grandma's record from the database. To get a single record from the database, use Select.get():
 
 ```
-grandma = Person.get(Person.name == 'Grandma L.')
-grandma = Person.select().where(Person.name == 'Grandma L.').get()
-grandma = Person.select().where(Person.name == 'Grandma L.').first()
-grandma = Person.select().where(Person.name == 'Grandma L.').get_or_none()
+grandma = Person.get(name = 'Grandma')
+grandma = Person.get(Person.name == 'Grandma')
+grandma = Person.select().where(Person.name == 'Grandma').get()
+grandma = Person.select().where(Person.name == 'Grandma').first()
+grandma = Person.select().where(Person.name == 'Grandma').get_or_none()
 grandma = Person.get_by_id('65bda09d6efd9b1130ffccb0')
 grandma = Person.select().where(Person.id == '65bda09d6efd9b1130ffccb0').first()
 ```
 
 ```
-grandma = Person.select(Person.name, Person.birthday).where(Person.name == 'Grandma L.').first()
+grandma = Person.select(Person.name, Person.birthday).where(Person.name == 'Grandma').first()
 ```
 
 The code lines above return an instance of the Model. If, in some situations, you need a dictionary, you can use dicts() to return a standard Python dictionary.

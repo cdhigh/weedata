@@ -66,12 +66,18 @@ class TestUpdating(ModelTestCase):
         User.delete().where(User.name == 'user5').execute()
         user = User.get(User.name == 'user5')
         self.assertEqual(user, None)
+
         user = User.get(User.name == 'user1')
         self.assertEqual(user.name, 'user1')
+
+        User.delete_by_id(self.ids[0])
+        user = User.get(User.name == 'user1')
+        self.assertEqual(user, None)
 
         t = Tweet.get()
         self.assertTrue(t != None)
         Tweet.delete().execute()
         t = Tweet.get()
         self.assertTrue(t == None)
+
         

@@ -4,7 +4,7 @@
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 import copy
-from .fields import Field, FieldDescriptor, PrimaryKeyField, DoesNotExist
+from .fields import Field, FieldDescriptor, PrimaryKeyField, DoesNotExist, Filter
 from .queries import QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder
 
 class BaseModel(type):
@@ -111,11 +111,33 @@ class Model(object, metaclass=BaseModel):
         return dict(((f.name if isinstance(f, Field) else f), v) for f, v in args.items())
         
     @classmethod
-    def get(cls, query=None):
+    def get(cls, *query, **filters):
         sq = cls.select()
         if query:
-            sq = sq.where(query)
+            # Handle simple lookup using just the primary key.
+            if len(query) == 1 and isinstance(query[0], str):
+                sq = sq.filter_by_id(query[0])
+            else:
+                sq = sq.where(*query)
+        for item, value in filters.items():
+            sq = sq.where(Filter(item, "$eq", value))
         return sq.get()
+
+    @classmethod
+    def get_or_create(cls, **kwargs):
+        defaults = kwargs.pop('defaults', {})
+        query = cls.select()
+        for field, value in kwargs.items():
+            query = query.where(getattr(cls, field) == value)
+
+        model = query.get()
+        if model:
+            return model, False
+        else:
+            if defaults:
+                kwargs.update(defaults)
+            with cls._meta.client.atomic():
+                return cls.create(**kwargs), True
 
     @classmethod
     def get_or_none(cls, query=None):
@@ -131,6 +153,10 @@ class Model(object, metaclass=BaseModel):
     @classmethod
     def get_by_id(cls, sid):
         return cls.select().filter_by_id(sid).first()
+
+    @classmethod
+    def delete_by_id(cls, pk):
+        return cls.delete().filter_by_id(pk).execute()
         
     def save(self, **kwargs):
         id_ = self.client.update_one(self)

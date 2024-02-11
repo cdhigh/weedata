@@ -93,5 +93,21 @@ class TestUpdating(ModelTestCase):
         self.assertEqual(contents, set(['AI', 'backend']))
         self.assertEqual(liked, set([18, 33]))
         self.assertEqual(disliked, set([10, 2]))
+
+    def test_get_or_create(self):
+        user, created = User.get_or_create(name='user6', defaults={'day': datetime.datetime(1940, 10, 9), 'email': 'other@e.com', 'times': 0})
+        self.assertEqual(created, False)
+        self.assertEqual(user.email, 'user6@e.com')
+
+        user, created = User.get_or_create(name='user7', defaults={'day': datetime.datetime(1940, 11, 9), 'email': 'other@e.com', 'times': 11})
+        self.assertEqual(created, True)
+        self.assertEqual(user.email, 'other@e.com')
+
+        user = User.get(name='user7')
+        self.assertEqual(user.name, 'user7')
+        self.assertEqual(user.email, 'other@e.com')
+        self.assertEqual(user.times, 11)
+        user.delete_instance()
         
+
         
