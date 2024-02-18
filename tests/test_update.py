@@ -7,7 +7,7 @@ from test_base import *
 class User(Model):
     class Meta:
         database = database
-    name = CharField()
+    name = CharField(unique=True)
     day = DateTimeField()
     email = CharField()
     times = IntegerField()
@@ -108,6 +108,17 @@ class TestUpdating(ModelTestCase):
         self.assertEqual(user.email, 'other@e.com')
         self.assertEqual(user.times, 11)
         user.delete_instance()
-        
 
+    def test_replace(self):
+        d = datetime.datetime
+        id_ = User.get(name='user1').id
+        data = {'name': 'user1', 'day': d(1990, 5, 15), 'email': 'new@e.com', 'times': 30}
+        self.assertEqual(User.replace(data).execute(), id_)
+        self.assertEqual(User.get(User.id == id_).times, 30)
+        id_ = User.replace(name='user10', day=d(1990, 5, 15), email='10@10', times=100).execute()
+        self.assertEqual(User.get(User.name == 'user10').times, 100)
+        self.assertEqual(User.get(User.id == id_).email, '10@10')
+
+        with self.assertRaisesCtx(AttributeError):
+            Tweet.replace(user_id='user1', content='new', liked=1, disliked=20).execute()
         

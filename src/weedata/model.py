@@ -5,10 +5,11 @@
 #Repository: <https://github.com/cdhigh/weedata>
 import copy
 from .fields import Field, FieldDescriptor, PrimaryKeyField, DoesNotExist, Filter
-from .queries import QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder
+from .queries import (QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder,
+    ReplaceQueryBuilder)
 
 class BaseModel(type):
-    inheritable_options = ['client', 'order_by', 'primary_key']
+    inheritable_options = ['client', 'order_by', 'primary_key', 'indexes']
 
     def __new__(cls, name, bases, attrs):
         if not bases:
@@ -50,12 +51,14 @@ class BaseModel(type):
         for name, attr in cls.__dict__.items():
             if isinstance(attr, Field):
                 attr.add_to_class(cls, name)
+                if attr.index or attr.unique:
+                    cls._meta.indexes.append(name)
         
         cls._meta.prepared()
         return cls
 
 class ModelOptions(object):
-    def __init__(self, cls, client=None, order_by=None, primary_key='id', **kwargs):
+    def __init__(self, cls, client=None, order_by=None, primary_key='id', indexes=None, **kwargs):
         self.model_class = cls
         self.name = cls.__name__
         self.fields = {}
@@ -63,6 +66,7 @@ class ModelOptions(object):
         self.client = client #database here is actually a database client
         self.order_by = order_by
         self.primary_key = primary_key
+        self.indexes = indexes or []
         
     def prepared(self):
         for field in self.fields.values():
@@ -101,6 +105,10 @@ class Model(object, metaclass=BaseModel):
     @classmethod
     def insert_many(cls, datas: list):
         return InsertQueryBuilder(cls, datas)
+
+    @classmethod
+    def replace(cls, *args, **kwargs):
+        return ReplaceQueryBuilder(cls, cls.combine_args_kwargs(*args, **kwargs))
 
     @classmethod
     def combine_args_kwargs(cls, *args, **kwargs):
@@ -198,10 +206,16 @@ class Model(object, metaclass=BaseModel):
     @classmethod
     def bind(cls, client):
         cls._meta.client = client
-        
+    
+    #Used for create index
+    #MongoDB Create index commands will not recreate existing indexes and 
+    #instead return a success message indicating “all indexes already exist” 
     @classmethod
     def create_table(cls, **kwargs):
-        pass
+        for field in cls._meta.fields.values():
+            if field.index or field.unique:
+                cls._meta.client.create_index(cls, field.name, 
+                    unique=field.unique, background=True)
 
     @classmethod
     def drop_table(cls, **kwargs):

@@ -40,7 +40,7 @@ if __name__ == '__main__':
     os.environ['WEEDATA_TEST_VERBOSITY'] = str(verbosity)
     os.environ['WEEDATA_SLOW_TESTS'] = '1' #Run tests that may be slow
 
-    #os.environ['WEEDATA_TEST_BACKEND'] = 'mongodb'
+    os.environ['WEEDATA_TEST_BACKEND'] = 'mongodb'
     #os.environ['WEEDATA_TEST_BACKEND'] = 'datastore'
 
     if report:

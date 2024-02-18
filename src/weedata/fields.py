@@ -46,9 +46,11 @@ class FieldDescriptor(object):
         instance._dirty[field_name] = True
 
 class Field(object):
-    def __init__(self, default=None, enforce_type=False, **kwargs):
+    def __init__(self, default=None, enforce_type=False, index=False, unique=False, **kwargs):
         self.default = default if callable(default) else lambda: default
         self.enforce_type = enforce_type
+        self.index = index
+        self.unique = unique
     
     def __eq__(self, other):
         return ((other.__class__ == self.__class__) and (other.name == self.name) and 

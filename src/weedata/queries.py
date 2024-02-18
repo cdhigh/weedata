@@ -141,6 +141,33 @@ class InsertQueryBuilder:
         ids = self.execute()
         return iter(ids if isinstance(ids, list) else [ids])
 
+class ReplaceQueryBuilder:
+    def __init__(self, model_class, to_replace: dict):
+        self.model_class = model_class
+        self.client = model_class._meta.client
+        self.to_replace = to_replace
+
+    def execute(self):
+        model = self.model_class
+        fields = model._meta.fields
+        data = self.to_replace
+        for name in data:
+            if fields[name].unique:
+                dbItem = model.get_or_none(getattr(model, name) == data[name])
+                if dbItem:
+                    for name in data:
+                        setattr(dbItem, name, data[name])
+                else:
+                    dbItem = model(**data)
+                dbItem.save()
+                return getattr(dbItem, model._meta.primary_key)
+
+        raise AttributeError('Replace query requires at lease one unique field')
+
+    def __iter__(self):
+        ids = self.execute()
+        return iter(ids if isinstance(ids, list) else [ids])
+
 class UpdateQueryBuilder(QueryBuilder):
     def __init__(self, model_class, to_update):
         super().__init__(model_class)

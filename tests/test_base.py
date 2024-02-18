@@ -166,17 +166,8 @@ class ModelDatabaseTestCase(DatabaseTestCase):
     def setUp(self):
         super().setUp()
         self._db_mapping = {}
-        # Override the model's database object with test db.
-        #if self.requires:
-        #    for model in self.requires:
-        #        self._db_mapping[model] = model._meta.database
-        #        model._meta.set_database(self.database)
 
     def tearDown(self):
-        # Restore the model's previous database object.
-        #if self.requires:
-        #    for model in self.requires:
-        #        model._meta.set_database(self._db_mapping[model])
         super().tearDown()
 
 class ModelTestCase(ModelDatabaseTestCase):
@@ -187,6 +178,7 @@ class ModelTestCase(ModelDatabaseTestCase):
         super().setUp()
         if self.requires:
             self.database.drop_tables(self.requires, safe=True)
+            self.database.create_tables(self.requires, safe=True)
 
     def tearDown(self):
         if self.requires:

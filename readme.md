@@ -400,6 +400,8 @@ user = User.select().where((User.name == 'python') | (User.name == 'cobra'))
 
 User.update({User.score: User.att_days + (User.evaluation * 2)}).where(User.age < 10).execute()
 
+User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).execute()
+
 ```
 
 
@@ -408,4 +410,9 @@ User.update({User.score: User.att_days + (User.evaluation * 2)}).where(User.age 
 * v0.1.0
 Initial version
 
+
+* v0.2.0
+1. Add Model.replace() and Model.get_or_create() method
+2. [MongoDB] Auto create index when field with attr index=True or unique=True
+3. fix DoesNotExist not found error
 

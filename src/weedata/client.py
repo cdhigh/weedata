@@ -32,8 +32,11 @@ class NosqlClient(object):
     def drop_tables(self, models, **kwargs):
         for model in models:
             self.drop_table(model)
-    def create_tables(self, models):
-        return True
+    def create_tables(self, models, **kwargs):
+        for model in models:
+            model.create_table(**kwargs)
+    def create_index(self, model, keys, **kwargs):
+        pass
     def is_closed(self):
         return False
     def connect(self, **kwargs):
@@ -360,6 +363,9 @@ class MongoDbClient(NosqlClient):
     def transaction(self, **kwargs):
         #return self.client.start_session(**kwargs)
         return fakeTransation()
+
+    def create_index(self, model, keys, **kwargs):
+        self._db[model._meta.name].create_index(keys, **kwargs)
 
     def drop_table(self, model):
         model = model._meta.name if isinstance(model, BaseModel) else model
