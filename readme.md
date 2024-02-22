@@ -126,6 +126,7 @@ class Message(MyBaseModel):
     read_count = IntegerField(default=0)
 ```
 
+</details>
 
 
 ## Storing data
