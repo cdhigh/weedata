@@ -33,7 +33,7 @@ class QueryBuilder:
     def filter_by_key(self, key):
         if key:
             key = self.client.ensure_key(key, self.kind)
-            self._filters.append(Filter(self.client.db_id_name(), "$eq", key))
+            self._filters.append(Filter(self.client.db_id_name(), Filter.EQ, key))
         return self
 
     def filter_by_id(self, id_):
@@ -86,10 +86,10 @@ class QueryBuilder:
                 else:
                     item, value = f_item.item, f_item.value
                     op = self.client.op_map(f_item.op)
-                    eq_op = self.client.op_map('$eq')
-                    ne_op = self.client.op_map('$ne')
-                    in_op = self.client.op_map('$in')
-                    nin_op = self.client.op_map('$nin')
+                    eq_op = self.client.op_map(Filter.EQ)
+                    ne_op = self.client.op_map(Filter.NE)
+                    in_op = self.client.op_map(Filter.IN)
+                    nin_op = self.client.op_map(Filter.NIN)
                     merged.setdefault(item, {})
                     if op == ne_op: #convert multiple "!=" to "not in"
                         if nin_op in merged[item]:
@@ -114,13 +114,17 @@ class QueryBuilder:
         return iter(self.execute())
 
     def __repr__(self):
-        return f"<QueryBuilder filters: {self._filters}, ordered by: {self._order}>"
+        return f"<QueryBuilder filters: {self._filters}, order_by: {self._order}>"
 
 class DeleteQueryBuilder(QueryBuilder):
     def execute(self):
-        models = [m for m in super().execute()]
-        self.client.delete_many(models)
-        return len(models)
+        models = []
+        for m in super().execute():
+            models.append(m)
+            for field in filter(lambda field: field.on_delete, m._meta.backref.values()):
+                field.model.delete().where(field == m).execute()
+
+        return self.client.delete_many(models)
 
     def __repr__(self):
         return f"<DeleteQueryBuilder filters: {self._filters}>"
@@ -160,7 +164,7 @@ class ReplaceQueryBuilder:
                 else:
                     dbItem = model(**data)
                 dbItem.save()
-                return getattr(dbItem, model._meta.primary_key)
+                return dbItem.get_id()
 
         raise AttributeError('Replace query requires at lease one unique field')
 

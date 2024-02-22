@@ -8,25 +8,68 @@ __all__ = [
     'DoesNotExist', 'Field', 'PrimaryKeyField', 'BooleanField', 'IntegerField', 'BigIntegerField',
     'SmallIntegerField', 'BitField', 'TimestampField', 'IPField', 'FloatField', 'DoubleField',
     'DecimalField', 'CharField', 'TextField', 'FixedCharField', 'UUIDField', 'BlobField',
-    'DateTimeField', 'DateField', 'TimeField', 'JSONField', 
+    'DateTimeField', 'DateField', 'TimeField', 'JSONField', 'ForeignKeyField', 'Filter',
 ]
 
-import datetime
-
-#Used for overloading arithmetic operators
-def arith_op(op, reverse=False):
-    def inner(self, other):
-        return UpdateExpr(other, op, self) if reverse else UpdateExpr(self, op, other)
-    return inner
-
-#Used for overloading comparison operators
-def comp_op(op):
-    def inner(self, other):
-        return self._generate_filter(op, other)
-    return inner
+import datetime, json
     
 class DoesNotExist(Exception):
     pass
+
+def filter_op(op):
+    def inner(self, other):
+        assert(isinstance(other, Filter))
+        if self.bit_op == op:
+            self.children.append(other)
+            return self
+        else:
+            return Filter(bit_op=op, children=[self, other])
+    return inner
+
+class Filter:
+    EQ = '$eq'
+    NE = '$ne'
+    LT = '$lt'
+    GT = '$gt'
+    LE = '$lte'
+    GE = '$gte'
+    IN = '$in'
+    NIN = '$nin'
+    AND = '$and'
+    OR = '$or'
+
+    def __init__(self, item=None, op=None, value=None, bit_op=None, children=None):
+        self.item = item
+        self.op = op
+        self.value = value
+        self.bit_op = bit_op #If composed of & | ~
+        self.children = children or []
+
+    def clone(self, encoding=None):
+        children = [c.clone(encoding) for c in self.children]
+        if encoding:
+            item = self.item.encode(encoding) if isinstance(self.item, str) else self.item
+            return Filter(item, self.op, self.value, self.bit_op, children)
+        else:
+            return Filter(self.item, self.op, self.value, self.bit_op, children)
+
+    __and__ = filter_op('$and')
+    __or__ = filter_op('$or')
+
+    def __invert__(self):
+        self.children = [self.clone()]
+        self.bit_op = '$nor' #use '$nor' instead Of '$not' can simplfy code generation
+        self.item = self.op = self.value = None
+        return self
+
+    def __str__(self):
+        if self.children:
+            s = []
+            for c in self.children:
+                s.append(str(c))
+            return f'{self.bit_op}\n' + '\n'.join(s)
+        else:
+            return f"[{self.item} {self.op} {self.value}]"
 
 class FieldDescriptor(object):
     def __init__(self, field):
@@ -45,12 +88,69 @@ class FieldDescriptor(object):
         instance._data[field_name] = value
         instance._dirty[field_name] = True
 
+class ForeignKeyDescriptor(FieldDescriptor):
+    def __init__(self, field, foreign_model):
+        super().__init__(field)
+        self.foreign_model = foreign_model
+
+    def get_object_or_id(self, instance):
+        field_name = self.field_name
+        foreign_id = instance._data.get(field_name)
+        if foreign_id:
+            obj = instance._obj_cache.get(field_name, None)
+            if not obj:
+                obj = self.foreign_model.get_by_id(foreign_id)
+                instance._obj_cache[field_name] = obj
+            return obj
+        elif not self.field_inst.null:
+            raise DoesNotExist(f'Foreign key {field_name} is null')
+        return foreign_id
+
+    def __get__(self, instance, instance_type=None):
+        if instance:
+            return self.get_object_or_id(instance)
+        return self.field_inst
+
+    def __set__(self, instance, value):
+        if isinstance(value, self.foreign_model):
+            foreign_key = value.get_id()
+            if not foreign_key:
+                raise DoesNotExist(f'Foreign key {self.field_name} is null')
+            instance._data[self.field_name] = foreign_key
+            instance._obj_cache[self.field_name] = value
+        else:
+            instance._data[self.field_name] = value
+
+class BackRefDescriptor(object):
+    def __init__(self, field):
+        self.field_inst = field
+        self.foreign_model = field.model
+
+    def __get__(self, instance, instance_type=None):
+        if instance:
+            return self.foreign_model.select().where(self.field_inst == instance.get_id())
+        return self
+
+#Used for overloading arithmetic operators
+def arith_op(op, reverse=False):
+    def inner(self, other):
+        return UpdateExpr(other, op, self) if reverse else UpdateExpr(self, op, other)
+    return inner
+
+#Used for overloading comparison operators
+def comp_op(op):
+    def inner(self, other):
+        return self._generate_filter(op, other)
+    return inner
+
 class Field(object):
-    def __init__(self, default=None, enforce_type=False, index=False, unique=False, **kwargs):
+    def __init__(self, default=None, enforce_type=False, index=False, unique=False, null=False, **kwargs):
         self.default = default if callable(default) else lambda: default
         self.enforce_type = enforce_type
         self.index = index
         self.unique = unique
+        self.null = null
+        self.stringify = False
     
     def __eq__(self, other):
         return ((other.__class__ == self.__class__) and (other.name == self.name) and 
@@ -62,36 +162,43 @@ class Field(object):
     def check_type(self, value):
         return True
 
-    def add_to_class(self, klass, name):
+    def add_to_class(self, klass, name, stringify=False):
         self.name = name
         self.model = klass
+        self.stringify = stringify
         klass._meta.fields[name] = self
         setattr(klass, name, FieldDescriptor(self))
+
+    def _db_value(self, value):
+        if self.stringify:
+            value = self.db_value(value)
+            return value if isinstance(value, bytes) else json.dumps(value).encode('utf-8')
+        else:
+            return self.db_value(value)
+
+    def _python_value(self, value):
+        if self.stringify:
+            try:
+                return self.python_value(json.loads(value))
+            except:
+                pass
+        
+        return self.python_value(value)
 
     def db_value(self, value):
         return value
 
-    @classmethod
     def python_value(self, value):
         return value
 
-    __eq__ = comp_op('$eq')
-    __ne__ = comp_op('$ne')
-    __lt__ = comp_op('$lt')
-    __gt__ = comp_op('$gt')
-    __le__ = comp_op('$lte')
-    __ge__ = comp_op('$gte')
-    in_ = comp_op('$in')
-    not_in = comp_op('$nin')
-    
     def between(self, other1, other2):
         if other1 <= other2:
-            child1 = self._generate_filter("$gt", other1)
-            child2 = self._generate_filter("$lt", other2)
+            child1 = self._generate_filter(Filter.GT, other1)
+            child2 = self._generate_filter(Filter.LT, other2)
         else:
-            child1 = self._generate_filter("$lt", other1)
-            child2 = self._generate_filter("$gt", other2)
-        return Filter(bit_op='$and', children=[child1, child2])
+            child1 = self._generate_filter(Filter.LT, other1)
+            child2 = self._generate_filter(Filter.GT, other2)
+        return Filter(bit_op=Filter.AND, children=[child1, child2])
 
     def _generate_filter(self, op, other):
         if self.enforce_type and not self.check_type(other):
@@ -104,6 +211,15 @@ class Field(object):
     def desc(self):
         return '-{}'.format(self.name)
 
+    __eq__ = comp_op(Filter.EQ)
+    __ne__ = comp_op(Filter.NE)
+    __lt__ = comp_op(Filter.LT)
+    __gt__ = comp_op(Filter.GT)
+    __le__ = comp_op(Filter.LE)
+    __ge__ = comp_op(Filter.GE)
+    in_ = comp_op(Filter.IN)
+    not_in = comp_op(Filter.NIN)
+    
     __add__ = arith_op('+')
     __sub__ = arith_op('-')
     __mul__ = arith_op('*')
@@ -124,6 +240,42 @@ class PrimaryKeyField(Field):
     def _generate_filter(self, op, other):
         other = self.model._meta.client.ensure_key(other)
         return Filter(self.model._meta.client.db_id_name(), op, other)
+    def _db_value(self, value):
+        if self.stringify:
+            return value.encode('utf-8') if isinstance(value, str) else value
+        else:
+            return value
+    def _python_value(self, value):
+        if self.stringify:
+            return value.decode('utf-8') if isinstance(value, bytes) else value
+        else:
+            return value
+
+class ForeignKeyField(Field):
+    def __init__(self, model, backref=None, on_delete=None, **kwargs):
+        super().__init__(**kwargs)
+        self.foreign_model = model
+        self.backref = backref
+        self.on_delete = on_delete
+
+    def add_to_class(self, klass, name, stringify=False):
+        self.name = name
+        self.model = klass
+        self.stringify = stringify
+        klass._meta.fields[name] = self
+        setattr(klass, name, ForeignKeyDescriptor(self, self.foreign_model))
+        self.foreign_model._meta.backref[self.backref or klass._meta.name + '_ref'] = self
+        if self.backref:
+            setattr(self.foreign_model, self.backref, BackRefDescriptor(self))
+
+    def db_value(self, value):
+        if isinstance(value, self.foreign_model):
+            value = value.get_id()
+        return super().db_value(value)
+
+    def _generate_filter(self, op, other):
+        other = self.model._meta.client.ensure_key(other)
+        return Filter(self.name, op, str(other))
 
 class BooleanField(Field):
     pass
@@ -154,19 +306,45 @@ FixedCharField = CharField
 UUIDField = CharField
 
 class BlobField(Field):
-    pass
+    def check_type(self, value):
+        return isinstance(value, bytes)
+    def _db_value(self, value):
+        return value
+    def _python_value(self, value):
+        return value
 
 class DateTimeField(Field):
     def check_type(self, value):
         return isinstance(value, datetime.datetime)
+    def db_value(self, value):
+        return value.isoformat() if value and self.stringify else value
+    def python_value(self, value):
+        if value and self.stringify:
+            return datetime.datetime.fromisoformat(value)
+        else:
+            return value
 
 class DateField(Field):
     def check_type(self, value):
         return isinstance(value, datetime.date)
+    def db_value(self, value):
+        return value.isoformat() if value and self.stringify else value
+    def python_value(self, value):
+        if value and self.stringify:
+            return datetime.date.fromisoformat(value)
+        else:
+            return value
 
 class TimeField(Field):
     def check_type(self, value):
         return isinstance(value, datetime.time)
+    def db_value(self, value):
+        return value.isoformat() if value and self.stringify else value
+    def python_value(self, value):
+        if value and self.stringify:
+            return datetime.datetime.fromisoformat(value).time()
+        else:
+            return value
 
 class JSONField(Field):
     def check_type(self, value):
@@ -176,7 +354,6 @@ class JSONField(Field):
     @classmethod
     def list_default(cls):
         return []
-        
     @classmethod
     def dict_default(cls):
         return {}
@@ -219,42 +396,3 @@ class UpdateExpr:
         
         return f'({inst} {self.op} {other})'
 
-def filter_op(op):
-    def inner(self, other):
-        assert(isinstance(other, Filter))
-        if self.bit_op == op:
-            self.children.append(other)
-            return self
-        else:
-            return Filter(bit_op=op, children=[self, other])
-    return inner
-
-class Filter:
-    def __init__(self, item=None, op=None, value=None, bit_op=None, children=None):
-        self.item = item
-        self.op = op
-        self.value = value
-        self.bit_op = bit_op #If composed of & | ~
-        self.children = children or []
-
-    def clone(self):
-        return Filter(self.item, self.op, self.value, self.bit_op, self.children)
-
-    __and__ = filter_op('$and')
-    __or__ = filter_op('$or')
-
-    def __invert__(self):
-        self.children = [self.clone()]
-        self.bit_op = '$nor' #use '$nor' instead Of '$not' can simplfy code generation
-        self.item = self.op = self.value = None
-        return self
-
-    def __str__(self):
-        if self.children:
-            s = []
-            for c in self.children:
-                s.append(str(c))
-                return f'{self.bit_op}\n' + '\n'.join(s)
-        else:
-            return f"[{self.item} {self.op} {self.value}]"
-    

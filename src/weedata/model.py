@@ -4,7 +4,7 @@
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 import copy
-from .fields import Field, FieldDescriptor, PrimaryKeyField, DoesNotExist, Filter
+from .fields import Field, FieldDescriptor, PrimaryKeyField, ForeignKeyField, DoesNotExist, Filter
 from .queries import (QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder,
     ReplaceQueryBuilder)
 
@@ -21,8 +21,7 @@ class BaseModel(type):
             meta_options.update((k, v) for k, v in meta.__dict__.items() if not k.startswith('_'))
             #for compatibilty, app code use the name "database", convert to "client" here
             if 'database' in meta_options:
-                client = meta_options.pop('database', None)
-                meta_options['client'] = client
+                meta_options['client'] = meta_options.pop('database', None)
 
         for b in bases:
             base_meta = getattr(b, '_meta', None)
@@ -48,9 +47,10 @@ class BaseModel(type):
         cls._dirty = None
 
         # replace the fields with field descriptors, calling the add_to_class hook
+        stringify = meta_options['client'].stringifyStore if meta_options['client'] else False
         for name, attr in cls.__dict__.items():
             if isinstance(attr, Field):
-                attr.add_to_class(cls, name)
+                attr.add_to_class(cls, name, stringify)
                 if attr.index or attr.unique:
                     cls._meta.indexes.append(name)
         
@@ -67,6 +67,8 @@ class ModelOptions(object):
         self.order_by = order_by
         self.primary_key = primary_key
         self.indexes = indexes or []
+        #self.foreign = {}
+        self.backref = {}
         
     def prepared(self):
         for field in self.fields.values():
@@ -77,6 +79,7 @@ class Model(object, metaclass=BaseModel):
     def __init__(self, **kwargs):
         self._key = kwargs.get('_key', None)
         self._data = dict((f.name, v()) for f, v in self._meta.defaults.items())
+        self._obj_cache = {} # cache of foreign_key objects
         self._dirty = {'__key__': True, '_id': True}
         for name, value in kwargs.items():
             setattr(self, name, value)
@@ -92,7 +95,7 @@ class Model(object, metaclass=BaseModel):
 
     @classmethod
     def delete(cls):
-        return DeleteQueryBuilder(cls, getattr(cls, cls._meta.primary_key, None))
+        return DeleteQueryBuilder(cls)
 
     @classmethod
     def update(cls, *args, **kwargs):
@@ -128,7 +131,7 @@ class Model(object, metaclass=BaseModel):
             else:
                 sq = sq.where(*query)
         for item, value in filters.items():
-            sq = sq.where(Filter(item, "$eq", value))
+            sq = sq.where(Filter(item, Filter.EQ, value))
         return sq.get()
 
     @classmethod
@@ -167,11 +170,12 @@ class Model(object, metaclass=BaseModel):
         return cls.delete().filter_by_id(pk).execute()
         
     def save(self, **kwargs):
-        id_ = self.client.update_one(self)
-        setattr(self, self._meta.primary_key, id_)
-        return self
-
+        return self.set_id(self.client.update_one(self))
+        
     def delete_instance(self, **kwargs):
+        #on delete cascade
+        for field in filter(lambda field: field.on_delete, self._meta.backref.values()):
+            field.model.delete().where(field == self.get_id()).execute()
         self.client.delete_one(self)
 
     @property
@@ -195,7 +199,9 @@ class Model(object, metaclass=BaseModel):
         for name, field in self._meta.fields.items():
             if not should_skip(name) and (not only_dirty or self._dirty.get(name, False)):
                 value = getattr(self, name, None)
-                data[name] = field.db_value(value) if db_value else value
+                if db_value or isinstance(field, ForeignKeyField):
+                    value = field._db_value(value)
+                data[name] = value
 
         if kwargs.get('remove_id'):
             data.pop('_key', None)
@@ -206,10 +212,12 @@ class Model(object, metaclass=BaseModel):
     @classmethod
     def bind(cls, client):
         cls._meta.client = client
+        for field in klass._meta.fields.value():
+            field.stringify = client.stringifyStore
     
     #Used for create index
     #MongoDB Create index commands will not recreate existing indexes and 
-    #instead return a success message indicating “all indexes already exist” 
+    #instead return a success message indicating "all indexes already exist"
     @classmethod
     def create_table(cls, **kwargs):
         for field in cls._meta.fields.values():
@@ -230,3 +238,11 @@ class Model(object, metaclass=BaseModel):
         for name in field_name:
             if name not in excluded:
                 self._dirty[name] = False
+
+    def get_id(self):
+        return getattr(self, self._meta.primary_key, None)
+
+    def set_id(self, value):
+        setattr(self, self._meta.primary_key, value)
+        return self
+

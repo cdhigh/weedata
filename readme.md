@@ -3,9 +3,9 @@
 [![PyPI version shields.io](https://img.shields.io/pypi/v/weedata.svg)](https://pypi.python.org/pypi/weedata/) ![python](https://img.shields.io/badge/python-3.6+-blue) [![License: MIT](https://img.shields.io/badge/License-MIT%20-blue.svg)](https://github.com/cdhigh/weedata/blob/main/LICENSE)
 
 
-The weedata is a python ODM/ORM module for Google Cloud Datastore and MongoDB, featuring a compatible interface with [Peewee](https://github.com/coleifer/peewee).    
+The weedata is a python ODM/ORM module for Google Cloud Datastore / MongoDB / redis, featuring a compatible interface with [Peewee](https://github.com/coleifer/peewee).    
 It has limited features, with a primary focus on compatibility with the Peewee API.    
-If you don't use advanced SQL features such as foreign keys or multi-table join queries and more, you can easily switch between SQL and NoSQL without modifying your application code.    
+If you don't use advanced SQL features such as multi-table join queries and more, you can easily switch between SQL and NoSQL without modifying your application code.    
 I know using NoSQL as if it were SQL is not a very smart idea, but it can achieve maximum compatibility with various databases, so, just choose what you like.    
 
 
@@ -21,6 +21,7 @@ The majority of the content in this document is directly taken from the [officia
 
 ## How to migrate your peewee-based project to NoSQL
 Only Two Steps Needed:
+
 1. Change 
 ```
 from peewee import *
@@ -38,19 +39,25 @@ to one of the following lines:
 ```
 db = DatastoreClient(project="project id")
 db = MongoDbClient(dbName, "mongodb://localhost:27017/")
+db = RedisDbClient("project id", "redis://127.0.0.1:6379/")
 ```
 
 
 
 ## Installation
+<details>
+
 weedata supports Google Cloud Datastore and MongoDB.    
 To use Google Cloud Datastore, you need to install google-cloud-datastore [optional, only install if need].   
 To use MongoDB, you need to install pymongo [optional, only install if need].   
+
+To use redis, you need to install Redis-py [optional, only install if need].   
 
 ```
 pip install google-cloud-datastore
 pip install pymongo
 pip install weedata
+pip install redis
 ```
 
 
@@ -64,16 +71,36 @@ API signature: DatastoreClient(project=None, namespace=None, credentials=None, \
 weedata uses pymongo as the underlying MongoDB driver. After correctly installing the MongoDB service and pymongo, create a client following this API signature.
 The parameter 'project' corresponds to the MongoDB database name, and 'host' can be passed as complete database url.
 ```
-MongoDbClient(project, host=None, port=None, username=None, password=None)
+MongoDbClient(project, host='127.0.0.1', port=27017, username=None, password=None
 ```
 
+### RedisDbClient
+weedata uses redis-py as the underlying redis driver. After correctly installing the redis service and redis-py, create a client following this API signature.  
+The parameter 'project' corresponds to the redis key prefix, and 'host' can be passed as complete database url, you can also choose which db to be used by passing the parameter 'db', it's range is [0-15].
+```
+RedisDbClient(project, host='127.0.0.1', port=6379, db=0, password=None, key_sep=':')
+```
+
+> **Important Notice:**
+> Redis functions as an in-memory database. Although it includes disk persistence capabilities, this feature does not ensure complete data integrity and presents a potential risk of data loss. Prior to implementing Redis as a storage database, it is crucial to grasp pertinent knowledge and configure it appropriately, including enabling RDB (Redis Database) or AOF (Append Only File) functionality.
+For example, you can add two lines in redis.conf:
+```
+appendonly yes
+appendfsync always
+```
+</details>
+
+
+
 ## Model Definition
+<details>
 
 ```
 from weedata import *
 
 db = DatastoreClient(project="project id")
 db = MongoDbClient("project id", "mongodb://localhost:27017/")
+db = RedisDbClient("project id", "redis://127.0.0.1:6379/")
 
 class Person(Model):
     class Meta:
@@ -102,6 +129,8 @@ class Message(MyBaseModel):
 
 
 ## Storing data
+<details>
+
 Let's begin by populating the database with some people. We will use the save() and create() methods to add and update people's records.
 
 ```
@@ -116,16 +145,26 @@ You can also add a person by calling the create() method, which returns a model 
 grandma = Person.create(name='grandma', birthday=date(1935, 3, 1))
 Person.insert_many([{'name':'Herb', 'birthday':date(1950, 5, 5)}, {'name':'Adam', 'birthday':date(1990, 9, 1)}])
 ```
+</details>
+
+
 
 ## Counting records
+<details>
+
 You can count the number of rows in any select query:
 
 ```
 Tweet.select().count()
 Tweet.select().where(Tweet.id > 50).count()
 ```
+</details>
+
+
 
 ## Updating data
+<details>
+
 To update data, modify the model instance and call save() to persist the changes.   
 Here we will change Grandma's name and then save the changes in the database.    
 Or you can use an update statement that supports all standard arithmetic operators:  
@@ -153,8 +192,12 @@ To remove the whole collection(MongoDb)/kind(datastore), you can use:
 Person.drop_table()
 db.drop_tables([Person, Message])
 ```
+</details>
+
 
 ## Retrieving Data
+<details>
+
 
 ### Getting single records
 Let's retrieve Grandma's record from the database. To get a single record from the database, use Select.get():
@@ -162,9 +205,9 @@ Let's retrieve Grandma's record from the database. To get a single record from t
 ```
 grandma = Person.get(name = 'Grandma')
 grandma = Person.get(Person.name == 'Grandma')
-grandma = Person.select().where(Person.name == 'Grandma').get()
+grandma = Person.select().where(Person.name != 'Grandma').get()
 grandma = Person.select().where(Person.name == 'Grandma').first()
-grandma = Person.select().where(Person.name == 'Grandma').get_or_none()
+grandma = Person.get_or_none(Person.name == 'Grandma')
 grandma = Person.get_by_id('65bda09d6efd9b1130ffccb0')
 grandma = Person.select().where(Person.id == '65bda09d6efd9b1130ffccb0').first()
 ```
@@ -227,9 +270,11 @@ query = Person.select().where(Person.birthday > d1940).where(Person.birthday < d
 query = Person.select().where((Person.birthday < d1940) | (Person.birthday > d1960))
 query = Person.select().where(~((Person.birthday < d1940) | (Person.birthday > d1960)))
 ```
+</details>
 
 
 # Models and Fields
+<details>
 
 ## Field types supported:
 * IntegerField
@@ -244,6 +289,7 @@ query = Person.select().where(~((Person.birthday < d1940) | (Person.birthday > d
 * BlobField
 * UUIDField
 * JSONField
+* ForeignKeyField
 
 
 ## Reserved field names
@@ -251,8 +297,11 @@ The following names of fields reserved by the model, should be avoided for your 
 
 ```_key, _id, id```
 
+
 ## Field initialization arguments
 Parameters accepted by all field types and their default values:
+* `unique = False` – create a unique index on this column.
+* `index = False` – create an index on this column
 * `default = None` – any value or callable to use as a default for uninitialized models
 * `enforce_type = False` – determine if the new value is of a specific type.
 
@@ -348,9 +397,10 @@ class Meta
     database = db
     primary_key = 'id_'
 ```
-
+</details>
 
 # Querying
+<details>
 
 ## Selecting a single record
 
@@ -364,17 +414,18 @@ User.select().where(User.username.in_(['Charlie', 'Adam'])).order_by(User.birthd
 ## Filtering records
 You can filter for particular records using normal python operators. weedata supports a wide variety of query operators.
 
+
 ### Query operators
 The following types of comparisons are supported by weedata:
 
 | Comparison     | Meaning                         |
 |----------------|---------------------------------|
 | ==             | x equals y                      |
+| !=             | x is not equal to y             |
 | <              | x is less than y                |
 | <=             | x is less than or equal to y    |
 | >              | x is greater than y             |
 | >=             | x is greater than or equal to y |
-| !=             | x is not equal to y             |
 | .in_(list)     | IN lookup                       |
 | .not_in(list)  | NOT IN lookup.                  |
 | &              | logical AND                     |
@@ -403,16 +454,20 @@ User.update({User.score: User.att_days + (User.evaluation * 2)}).where(User.age 
 User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).execute()
 
 ```
+</details>
 
 
 # Changelog  
+<details>
+
+* v0.2.0 (unreleased yet)
+1. supports Redis
+2. supports ForeignKeyField
+3. Add Model.replace() and Model.get_or_create() method
+4. [MongoDB] Auto create index when field with attr index=True or unique=True
+5. fix DoesNotExist not found error
 
 * v0.1.0
 Initial version
 
-
-* v0.2.0
-1. Add Model.replace() and Model.get_or_create() method
-2. [MongoDB] Auto create index when field with attr index=True or unique=True
-3. fix DoesNotExist not found error
-
+</details>

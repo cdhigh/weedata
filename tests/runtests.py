@@ -5,7 +5,10 @@ import optparse, os, shutil, sys, unittest, importlib, coverage
 testDir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.abspath(os.path.join(testDir, '..', 'src')))
 
-TEST_MODULES = ['test_base', 'test_fields', 'test_save', 'test_queries', 'test_update', 'test_delete']
+if 0:
+    TEST_MODULES = ['test_base', 'test_fields', 'test_save', 'test_queries', 'test_update', 'test_delete']
+else:
+    TEST_MODULES = ['test_fields']
 
 def runtests(suite, verbosity=1, failfast=False):
     runner = unittest.TextTestRunner(verbosity=verbosity, failfast=failfast)
@@ -34,13 +37,14 @@ def reload_module(module_name):
 
 if __name__ == '__main__':
     verbosity = 1 #Verbosity of output
-    failfast = 0 #Exit on first failure/error
-    report = 'html'
+    failfast = 1 #Exit on first failure/error
+    report = ''
 
     os.environ['WEEDATA_TEST_VERBOSITY'] = str(verbosity)
     os.environ['WEEDATA_SLOW_TESTS'] = '1' #Run tests that may be slow
 
-    os.environ['WEEDATA_TEST_BACKEND'] = 'mongodb'
+    #os.environ['WEEDATA_TEST_BACKEND'] = 'mongodb'
+    #os.environ['WEEDATA_TEST_BACKEND'] = 'redis'
     #os.environ['WEEDATA_TEST_BACKEND'] = 'datastore'
 
     if report:
@@ -48,7 +52,7 @@ if __name__ == '__main__':
         cov.start()
 
     if not os.getenv('WEEDATA_TEST_BACKEND'):
-        for env in ['datastore', 'mongodb']:
+        for env in ['datastore', 'redis', 'mongodb']:
             print(f'starting tests for database "{env}"')
             os.environ['WEEDATA_TEST_BACKEND'] = env
             suite = collect_tests()

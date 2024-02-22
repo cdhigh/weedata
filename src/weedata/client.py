@@ -3,8 +3,9 @@
 #an ORM/ODM for Google Cloud Datastore/MongoDB, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
-import os
+import os, uuid
 from itertools import chain
+from operator import attrgetter
 
 try:
     from google.cloud import datastore
@@ -19,13 +20,21 @@ try:
 except ImportError:
     pymongo = None
 
-from .model import BaseModel
+try:
+    import redis
+except ImportError:
+    redis = None
+
+from .model import Model, BaseModel
+from .fields import Filter
 
 #if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore':
 #    from fake_datastore import *
 #    print('Alert: using fake datastore stub!!!')
 
 class NosqlClient(object):
+    stringifyStore = False #For redis, it's True
+
     def bind(self, models):
         for model in models:
             model.bind(self)
@@ -39,8 +48,14 @@ class NosqlClient(object):
         pass
     def is_closed(self):
         return False
+    def close(self):
+        return False
     def connect(self, **kwargs):
         return True
+    def atomic(self, **kwargs):
+        return fakeTransation()
+    def transaction(self, **kwargs):
+        return fakeTransation()
     @classmethod
     def op_map(cls, op):
         return op
@@ -59,8 +74,8 @@ class DatastoreClient(NosqlClient):
 
     @classmethod
     def op_map(cls, op):
-        return {'$eq': '=', '$ne': '!=', '$lt': '<', '$gt': '>', '$lte': '<=',
-            '$gte': '>=', '$in': 'IN', '$nin': 'NOT_IN'}.get(op, op)
+        return {Filter.EQ: '=', Filter.NE: '!=', Filter.LT: '<', Filter.GT: '>', Filter.LE: '<=',
+            Filter.GE: '>=', Filter.IN: 'IN', Filter.NIN: 'NOT_IN'}.get(op, op)
 
     def insert_one(self, model_class, data: dict):
         entity = self.create_entity(data, kind=model_class._meta.name)
@@ -88,11 +103,17 @@ class DatastoreClient(NosqlClient):
     def delete_one(self, model):
         if model._key:
             self.client.delete(model._key)
+            return 1
+        else:
+            return 0
 
     def delete_many(self, models):
         keys = [e._key for e in models if e._key]
         if keys:
             self.client.delete_multi(keys)
+            return len(keys)
+        else:
+            return 0
 
     def execute(self, queryObj, page_size=500, parent_key=None):
         model_class = queryObj.model_class
@@ -106,9 +127,10 @@ class DatastoreClient(NosqlClient):
 
     #count aggregation query
     def count(self, queryObj, parent_key=None):
-        count_query = self.get_aggregation_query(queryObj, parent_key).count()
-        with count_query.fetch() as query_result:
-            return next(query_result).value if query_result else 0
+        return len(list(self.execute(queryObj, parent_key=parent_key)))
+        #count_query = self.get_aggregation_query(queryObj, parent_key).count()
+        #with count_query.fetch() as query_result:
+        #    return next(query_result).value if query_result else 0
 
     #sum aggregation query
     def sum(self, queryObj, field, parent_key=None):
@@ -147,12 +169,11 @@ class DatastoreClient(NosqlClient):
         fields = inst._meta.fields
         for field_name, value in raw.items():
             if field_name in fields:
-                setattr(inst, field_name, fields[field_name].python_value(value))
+                setattr(inst, field_name, fields[field_name]._python_value(value))
             else:
                 setattr(inst, field_name, value)
         inst.clear_dirty(list(fields.keys()))
-        setattr(inst, inst._meta.primary_key, key.to_legacy_urlsafe().decode())
-        return inst
+        return inst.set_id(key.to_legacy_urlsafe().decode())
 
     def get_query(self, kind, parent_key=None):
         return self.client.query(kind=kind, ancestor=parent_key)
@@ -184,12 +205,12 @@ class DatastoreClient(NosqlClient):
 
             converted = []
             for operator in query_dict.keys():
-                if operator == '$or':
-                    subqueries = query_dict['$or']
+                if operator == Filter.OR:
+                    subqueries = query_dict[operator]
                     ds_filters = list(chain.from_iterable([to_ds_query(subquery) for subquery in subqueries]))
                     converted.append(qr.Or(ds_filters))
-                elif operator == '$and':
-                    subqueries = query_dict['$and']
+                elif operator == Filter.AND:
+                    subqueries = query_dict[operator]
                     ds_filters = list(chain.from_iterable([to_ds_query(subquery) for subquery in subqueries]))
                     converted.append(qr.And(ds_filters))
                 else:
@@ -236,6 +257,8 @@ class DatastoreClient(NosqlClient):
             return self.client.key(kind, parent=parent_key)
 
     def ensure_key(self, key, kind=None):
+        if isinstance(key, Model):
+            key = key.get_id()
         if isinstance(key, Key):
             return key
         elif kind and (isinstance(key, int) or key.isdigit()):
@@ -244,7 +267,7 @@ class DatastoreClient(NosqlClient):
             return Key.from_legacy_urlsafe(key)
 
     def drop_table(self, model):
-        kind = model._meta.name if isinstance(model, BaseModel) else model
+        kind = model._meta.name if issubclass(model, Model) else model
         query = self.get_query(kind)
         query.projection = ['__key__']
         keys = []
@@ -262,10 +285,10 @@ class DatastoreClient(NosqlClient):
         self.client.close()
 
 class MongoDbClient(NosqlClient):
-    def __init__(self, project, host=None, port=None, username=None, password=None):
+    def __init__(self, project, host='127.0.0.1', port=27017, username=None, password=None):
         self.project = project
-        self.host = host or 'localhost'
-        self.port = port or 27017
+        self.host = host
+        self.port = port
         if self.host.startswith('mongodb://'):
             self.client = pymongo.MongoClient(self.host)
         else:
@@ -287,7 +310,7 @@ class MongoDbClient(NosqlClient):
         return [str(id_) for id_ in ids]
         
     def update_one(self, model):
-        id_ = getattr(model, model._meta.primary_key, None)
+        id_ = model.get_id()
         if id_: #update
             data = model.dicts(remove_id=True, db_value=True, only_dirty=True)
             if data:
@@ -301,11 +324,12 @@ class MongoDbClient(NosqlClient):
      
     def delete_one(self, model):
         if model._id:
-            self._db[model._meta.name].delete_one({'_id': model._id})
+            return self._db[model._meta.name].delete_one({'_id': model._id}).deleted_count
+        else:
+            return 0
 
     def delete_many(self, models):
-        for model in models:
-            self.delete_one(model)
+        return sum([self.delete_one(model) for model in models])
         
     def execute(self, queryObj, page_size=500, parent_key=None):
         model_class = queryObj.model_class
@@ -330,12 +354,11 @@ class MongoDbClient(NosqlClient):
         fields = inst._meta.fields
         for field_name, value in raw.items():
             if field_name in fields:
-                setattr(inst, field_name, fields[field_name].python_value(value))
+                setattr(inst, field_name, fields[field_name]._python_value(value))
             else:
                 setattr(inst, field_name, value)
         inst.clear_dirty(list(fields.keys()))
-        setattr(inst, inst._meta.primary_key, str(inst._id)) #set primary_key
-        return inst
+        return inst.set_id(str(inst._id))
 
     #make projection dict to fetch some field only
     def build_projection(self, queryObj):
@@ -351,28 +374,177 @@ class MongoDbClient(NosqlClient):
             return None
 
     def ensure_key(self, key, kind=None):
+        if isinstance(key, Model):
+            key = key.get_id()
         if isinstance(key, ObjectId):
             return key
         else:
             return ObjectId(key)
 
-    def atomic(self, **kwargs):
-        #return self.client.start_session(**kwargs)
-        return fakeTransation()
-
-    def transaction(self, **kwargs):
-        #return self.client.start_session(**kwargs)
-        return fakeTransation()
-
     def create_index(self, model, keys, **kwargs):
         self._db[model._meta.name].create_index(keys, **kwargs)
 
     def drop_table(self, model):
-        model = model._meta.name if isinstance(model, BaseModel) else model
+        model = model._meta.name if issubclass(model, Model) else model
         self._db.drop_collection(model)
 
     def close(self):
         self.client.close()
+
+
+class RedisDbClient(NosqlClient):
+    stringifyStore = True
+    urlsafe_alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+
+    def __init__(self, project, host='127.0.0.1', port=6379, db=0, password=None, key_sep=':'):
+        if '://' in host:
+            self.redis = redis.from_url(host)
+        else:
+            self.redis = redis.Redis(host=host, port=port, db=db, password=password)
+        self.prefix = project
+        self.key_sep = key_sep
+
+    @classmethod
+    def op_map(cls, op):
+        return {Filter.EQ: '==', Filter.NE: '!=', Filter.LT: '<', Filter.GT: '>', Filter.LE: '<=',
+            Filter.GE: '>=', Filter.IN: 'in', Filter.NIN: 'not in'}.get(op, op)
+
+    #generate id of a 22 characters string instead of 36 characters UUID
+    @classmethod
+    def generate_id(cls):
+        id_ = uuid.uuid4().int
+        if id_ == 0:
+            return '0'
+        digits = []
+        while id_: #len(urlsafe_alphabet)==62
+            digits.append(cls.urlsafe_alphabet[int(id_ % 62)])
+            id_ //= 62
+        return ''.join(digits[::-1])
+
+    def build_key(self, model, id_):
+        #compatible for class and instance
+        model = model._meta.name if isinstance(model, (BaseModel, Model)) else model
+        return f'{self.prefix}{self.key_sep}{model}{self.key_sep}{id_}'
+
+    @classmethod
+    def db_id_name(cls):
+        return "id"
+
+    #InsertOneResult has inserted_id property
+    def insert_one(self, model_class, data: dict):
+        id_ = self.generate_id()
+        self.redis.hmset(self.build_key(model_class, id_), data)
+        return id_
+
+    #InsertManyResult has inserted_ids property
+    def insert_many(self, model_class, datas: list):
+        return [self.insert_one(model_class, data) for data in datas]
+        
+    def update_one(self, model):
+        id_ = model.get_id()
+        if id_: #update
+            data = model.dicts(remove_id=True, db_value=True, only_dirty=True)
+            if data:
+                key = self.build_key(model, id_)
+                self.redis.hmset(key, data)
+                model.clear_dirty(list(data.keys()))
+            return id_
+        else: #insert
+            data = model.dicts(remove_id=True, db_value=True)
+            model.clear_dirty(list(data.keys()))
+            return self.insert_one(model.__class__, data)
+     
+    def delete_one(self, model):
+        id_ = model.get_id()
+        if id_:
+            return self.redis.delete(self.build_key(model, id_))
+        else:
+            return 0
+
+    def delete_many(self, models):
+        return sum([self.delete_one(model) for model in models])
+        
+    def execute(self, queryObj, page_size=500, parent_key=None):
+        model_class = queryObj.model_class
+        filters = [flt.clone('utf-8') for flt in queryObj._filters]
+        fields = {name.encode('utf-8'): inst for name, inst in model_class._meta.fields.items()}
+        results = []
+        key_sep = self.key_sep.encode('utf-8')
+        id_name = self.db_id_name().encode('utf-8')
+        for key in self.redis.keys(self.build_key(model_class, '*')):
+            data = self.redis.hgetall(key)
+            data[id_name] = key.rsplit(key_sep, 1)[-1] #set primary key
+            for flt in filters:
+                if not self._matches_query(data, flt, fields):
+                    break
+            else:
+                #if queryObj._projection:
+                #    for k in data:
+                #        if k not in self._projection:
+                #            data[k] = None
+                results.append(data)
+
+        if queryObj._order:
+            order = queryObj._order[0].encode('utf-8')
+            reverse = False
+            if order.startswith(b'-'):
+                order = order[1:]
+                reverse = True
+            results.sort(key=lambda x: x.get(order), reverse=reverse)
+
+        for ret in (results[:queryObj._limit] if queryObj._limit else results):
+            yield self.make_instance(model_class, ret)
+
+    def _matches_query(self, data: dict, flt: Filter, fields: dict):
+        if not flt.bit_op:
+            item = flt.item
+            op = flt.op
+            dbValue = data.get(item, None)
+            if dbValue is None or item not in fields:
+                return False
+
+            value = fields[item]._db_value(flt.value)
+            return (((op == Filter.EQ) and (value == dbValue)) or
+                ((op == Filter.NE) and (value != dbValue)) or
+                ((op == Filter.LT) and (value < dbValue)) or
+                ((op == Filter.GT) and (value > dbValue)) or
+                ((op == Filter.LE) and (value <= dbValue)) or
+                ((op == Filter.GE) and (value >= dbValue)) or
+                ((op == Filter.IN) and (value in dbValue)) or
+                ((op == Filter.NIN) and (value not in dbValue)))
+        elif flt.bit_op == Filter.AND:
+            for c in flt.children:
+                if not self._matches_query(data, c, fields):
+                    return False
+            return True
+        elif flt.bit_op == Filter.OR:
+            for c in flt.children:
+                if self._matches_query(data, c, fields):
+                    return True
+            return False
+        else:
+            raise ValueError(f"Unsupported bit operator: {flt.bit_op}")
+        
+    def count(self, queryObj, parent_key=None):
+        return len(list(self.execute(queryObj)))
+
+    #make Model instance from database data
+    def make_instance(self, model_class, raw):
+        inst = model_class()
+        fields = model_class._meta.fields
+        for name, value in raw.items():
+            name = name.decode('utf-8') if isinstance(name, bytes) else name
+            setattr(inst, name, fields[name]._python_value(value) if name in fields else value)
+            
+        inst.clear_dirty(list(fields.keys()))
+        return inst.set_id(str(getattr(inst, self.db_id_name())))
+
+    def ensure_key(self, key, kind=None):
+        return key.get_id() if isinstance(key, Model) else str(key)
+        
+    def drop_table(self, model):
+        for key in self.redis.keys(self.build_key(model, '*')):
+            self.redis.delete(key)
 
 
 class fakeTransation:

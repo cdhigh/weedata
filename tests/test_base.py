@@ -12,8 +12,11 @@ VERBOSITY = int(os.environ.get('WEEDATA_TEST_VERBOSITY') or 1)
 SLOW_TESTS = bool(os.environ.get('WEEDATA_SLOW_TESTS'))
 
 def new_connection(**kwargs):
-    if os.getenv('WEEDATA_TEST_BACKEND', 'mongodb') == 'mongodb':
-        return MongoDbClient("weedata_test", "mongodb://localhost:27017/")
+    backEnd = os.getenv('WEEDATA_TEST_BACKEND', 'mongodb')
+    if backEnd == 'mongodb':
+        return MongoDbClient("weedata_test", "mongodb://127.0.0.1:27017/")
+    elif backEnd == 'redis':
+        return RedisDbClient("weedata", "redis://127.0.0.1:6379/")
     else:
         return DatastoreClient(project="kindleear")
 
@@ -56,7 +59,7 @@ class Account(TestModel):
 
 
 class Tweet(TestModel):
-    user = CharField()
+    user = ForeignKeyField(User, backref='tweets')
     content = TextField()
     timestamp = TimestampField()
 

@@ -6,7 +6,7 @@
 
 __version__ = '0.1.0'
 
-from .client import DatastoreClient, MongoDbClient
+from .client import DatastoreClient, MongoDbClient, RedisDbClient
 from .model import Model
 from .fields import *
 from .queries import QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder

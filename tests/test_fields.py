@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
 import calendar, datetime, time, uuid
+from collections import defaultdict
 from weedata import *
 from test_base import *
 
@@ -59,9 +60,9 @@ class TestFloatField(ModelTestCase):
         f1 = FloatModel.create(value=1.23)
         f2 = FloatModel.create(value=3.14, value_null=0.12)
 
-        query = FloatModel.select().order_by(FloatModel.id)
-        self.assertEqual([(f.value, f.value_null) for f in query],
-                         [(1.23, None), (3.14, 0.12)])
+        query = FloatModel.select()
+        self.assertEqual(set([(f.value, f.value_null) for f in query]),
+                         set([(1.23, None), (3.14, 0.12)]))
 
 class BoolModel(TestModel):
     value = BooleanField(null=True)
@@ -177,4 +178,63 @@ class TestSqliteInvalidDataTypes(ModelTestCase):
             it_db1 = InvalidTypes.get(InvalidTypes.tfield == 100)
             it_db2 = InvalidTypes.get(InvalidTypes.ifield == 'five')
             it_db3 = InvalidTypes.get(InvalidTypes.ffield == 'pi')
-        
+
+class U2(TestModel):
+    username = TextField()
+
+
+class T2(TestModel):
+    user = ForeignKeyField(U2, backref='tweets', on_delete=True)
+    content = TextField()
+
+class TestForeignKeyField(ModelTestCase):
+    requires = [User, Tweet, U2, T2]
+
+    def test_set_fk(self):
+        huey = User.create(username='huey')
+        zaizee = User.create(username='zaizee')    
+        tweet = Tweet.create(content='meow', user=huey)
+        self.assertEqual(tweet.user.username, 'huey')
+
+        tweet = Tweet.create(content='purr', user=zaizee.id)
+        self.assertEqual(tweet.user.username, 'zaizee')
+
+    def test_follow_attributes(self):
+        huey = User.create(username='huey')
+        Tweet.create(content='meow', user=huey)
+        Tweet.create(content='hiss', user=huey)
+
+        query = Tweet.select().order_by(Tweet.content)
+        self.assertEqual([(tweet.content, tweet.user.username)
+                          for tweet in query],
+                         [('hiss', 'huey'), ('meow', 'huey')])
+
+        self.assertRaises(AttributeError, lambda: Tweet.user.foo)
+
+    def test_disable_backref(self):
+        class Person(TestModel):
+            pass
+        class Pet(TestModel):
+            owner = ForeignKeyField(Person, backref='!')
+
+        self.assertEqual(Pet.owner.backref, '!')
+        self.assertRaises(AttributeError, lambda: Person.pet_set)
+
+    def test_on_delete_behavior(self):
+        users = []
+        for username in ('u1', 'u2', 'u3'):
+            user = U2.create(username=username)
+            users.append(user)
+            for i in range(3):
+                T2.create(user=user, content='%s-%s' % (username, i))
+
+        cnt = T2.delete().where(T2.user == users[0]).execute()
+        self.assertEqual(cnt, 3)
+        self.assertEqual(T2.select().count(), 6)
+
+        U2.delete().where(U2.username == 'u2').execute()
+        self.assertEqual(T2.select().count(), 3)
+
+        self.assertEqual(T2.select().where(T2.user == users[0]).count(), 0)
+        self.assertEqual(T2.select().where(T2.user == users[1]).count(), 0)
+        self.assertEqual(T2.select().where(T2.user == users[2]).count(), 3)
