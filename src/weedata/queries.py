@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-#an ORM/ODM for Google Cloud Datastore/MongoDB, featuring a compatible interface with Peewee.
+#an ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 import re
@@ -52,21 +52,20 @@ class QueryBuilder:
         self._distinct = [distinct_field]
         return self
 
-    def execute(self, page_size=500, parent_key=None):
-        return self.client.execute(self, page_size=page_size, parent_key=parent_key)
+    def execute(self, page_size=500, parent_key=None, limit=None):
+        return self.client.execute(self, page_size=page_size, parent_key=parent_key, limit=limit)
         
-    def first(self):
+    def get(self):
         result = None
         try:
-            result = next(self.execute(page_size=1))
+            result = next(self.execute(page_size=1, limit=1))
         except TypeError:
-            pass
+            pass # pragma: no cover
         except StopIteration:
             pass
         return result
 
-    def get(self):
-        return self.first()
+    first = get
 
     def count(self):
         return self.client.count(self)
@@ -113,9 +112,6 @@ class QueryBuilder:
     def __iter__(self):
         return iter(self.execute())
 
-    def __repr__(self):
-        return f"<QueryBuilder filters: {self._filters}, order_by: {self._order}>"
-
 class DeleteQueryBuilder(QueryBuilder):
     def execute(self):
         models = []
@@ -125,9 +121,6 @@ class DeleteQueryBuilder(QueryBuilder):
                 field.model.delete().where(field == m).execute()
 
         return self.client.delete_many(models)
-
-    def __repr__(self):
-        return f"<DeleteQueryBuilder filters: {self._filters}>"
 
 class InsertQueryBuilder:
     def __init__(self, model_class, to_insert):
@@ -187,13 +180,13 @@ class UpdateQueryBuilder(QueryBuilder):
                     if isinstance(value, UpdateExpr):
                         #value = eval(str(value))
                         value = self.my_safe_eval(str(value), {}, locals())
-                    setattr(e, field_name, value)
+                    setattr(e, field_name, field.python_value(field.db_value(value)))
             self.client.update_one(e)
             cnt += 1
         return cnt
 
     @classmethod
-    def my_safe_eval(cls, txt, g_dict, l_dict):
+    def my_safe_eval(cls, txt, gbl_dict, local_dict):
         code = compile(txt, '<user input>', 'eval')
         reason = None
         banned = ('eval', 'compile', 'exec', 'getattr', 'hasattr', 'setattr', 'delattr',
@@ -201,14 +194,10 @@ class UpdateQueryBuilder(QueryBuilder):
             'open', 'print', 'property', 'staticmethod', 'vars', 'os')
         for name in code.co_names:
             if re.search(r'^__\S*__$', name):
-                reason = 'dunder attributes not allowed'
+                reason = 'dunder attributes not allowed' # pragma: no cover
             elif name in banned:
-                reason = 'arbitrary code execution not allowed'
+                reason = 'arbitrary code execution not allowed' # pragma: no cover
             if reason:
-                raise NameError(f'{name} not allowed : {reason}')
-        return eval(code, g_dict, l_dict)
-
-    def __repr__(self):
-        return f"<UpdateQueryBuilder filters: {self._filters}>"
-
+                raise NameError(f'{name} not allowed : {reason}') # pragma: no cover
+        return eval(code, gbl_dict, local_dict)
 

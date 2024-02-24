@@ -7,12 +7,12 @@ license = { file = "LICENSE" }
 requires-python = ">=3.6"
 keywords = ["peewee", "ORM", "ODM", "google cloud datastore", "MongoDB", "redis"]
 dependencies = [
-  "google-cloud-datastore",
-  "pymongo",
-  "redis"
+#  "google-cloud-datastore",
+#  "pymongo",
+#  "redis"
 ]
 authors = [
-    { name="cdhigh", email="chsqyuan@gmail.com" },
+    { name="cdhigh", email="cdhigh@sohu.com" },
 ]
 classifiers = [
     "License :: OSI Approved :: MIT License",

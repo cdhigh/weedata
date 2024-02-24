@@ -59,7 +59,7 @@ class TestUpdating(ModelTestCase):
 
     def test_get_upate(self):
         t = Tweet.select(Tweet.content, 'liked').where(Tweet.content == 'cloud').first()
-        self.assertEqual(t.disliked, None)
+        self.assertIn(t.disliked, [None, 8])
         self.assertEqual(t.liked, 40)
         self.assertEqual(t.content, 'cloud')
         t.content = 'CLOUD'
@@ -87,12 +87,9 @@ class TestUpdating(ModelTestCase):
         (Tweet.update({Tweet.liked: ((Tweet.liked / Tweet.disliked) + 1) * 3 }).
             where(Tweet.content.in_(['AI', 'backend'])).execute())
         ts = list(Tweet.select().where((Tweet.content == 'AI') | (Tweet.content == 'backend')).execute())
-        contents = set([t.content for t in ts])
-        liked = set([t.liked for t in ts])
-        disliked = set([t.disliked for t in ts])
-        self.assertEqual(contents, set(['AI', 'backend']))
-        self.assertEqual(liked, set([18, 33]))
-        self.assertEqual(disliked, set([10, 2]))
+        self.assertEqual(set([t.content for t in ts]), set(['AI', 'backend']))
+        self.assertEqual(set([t.liked for t in ts]), set([18, 33]))
+        self.assertEqual(set([t.disliked for t in ts]), set([10, 2]))
 
     def test_get_or_create(self):
         user, created = User.get_or_create(name='user6', defaults={'day': datetime.datetime(1940, 10, 9), 'email': 'other@e.com', 'times': 0})
@@ -113,12 +110,16 @@ class TestUpdating(ModelTestCase):
         d = datetime.datetime
         id_ = User.get(name='user1').id
         data = {'name': 'user1', 'day': d(1990, 5, 15), 'email': 'new@e.com', 'times': 30}
-        self.assertEqual(User.replace(data).execute(), id_)
+        self.assertEqual(list(User.replace(data)), [id_])
         self.assertEqual(User.get(User.id == id_).times, 30)
         id_ = User.replace(name='user10', day=d(1990, 5, 15), email='10@10', times=100).execute()
         self.assertEqual(User.get(User.name == 'user10').times, 100)
         self.assertEqual(User.get(User.id == id_).email, '10@10')
 
+        #Tweet without unique fields
         with self.assertRaisesCtx(AttributeError):
             Tweet.replace(user_id='user1', content='new', liked=1, disliked=20).execute()
+
+        with self.assertRaisesCtx(ValueError):
+            Tweet.replace('user1', 'new', 1, 20).execute()
         

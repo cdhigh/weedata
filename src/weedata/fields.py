@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-#an ORM/ODM for Google Cloud Datastore/MongoDB, featuring a compatible interface with Peewee.
+#an ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 
@@ -8,7 +8,7 @@ __all__ = [
     'DoesNotExist', 'Field', 'PrimaryKeyField', 'BooleanField', 'IntegerField', 'BigIntegerField',
     'SmallIntegerField', 'BitField', 'TimestampField', 'IPField', 'FloatField', 'DoubleField',
     'DecimalField', 'CharField', 'TextField', 'FixedCharField', 'UUIDField', 'BlobField',
-    'DateTimeField', 'DateField', 'TimeField', 'JSONField', 'ForeignKeyField', 'Filter',
+    'DateTimeField', 'JSONField', 'ForeignKeyField', 'Filter',
 ]
 
 import datetime, json
@@ -37,6 +37,7 @@ class Filter:
     NIN = '$nin'
     AND = '$and'
     OR = '$or'
+    NOR = '$nor'
 
     def __init__(self, item=None, op=None, value=None, bit_op=None, children=None):
         self.item = item
@@ -44,6 +45,9 @@ class Filter:
         self.value = value
         self.bit_op = bit_op #If composed of & | ~
         self.children = children or []
+
+    def isFilterById(self, idName):
+        return (self.item == idName) and (self.op == self.EQ) and (not self.bit_op)
 
     def clone(self, encoding=None):
         children = [c.clone(encoding) for c in self.children]
@@ -58,11 +62,11 @@ class Filter:
 
     def __invert__(self):
         self.children = [self.clone()]
-        self.bit_op = '$nor' #use '$nor' instead Of '$not' can simplfy code generation
+        self.bit_op = self.NOR #use '$nor' instead Of '$not' can simplfy code generation
         self.item = self.op = self.value = None
         return self
 
-    def __str__(self):
+    def __str__(self): # pragma: no cover
         if self.children:
             s = []
             for c in self.children:
@@ -109,17 +113,19 @@ class ForeignKeyDescriptor(FieldDescriptor):
     def __get__(self, instance, instance_type=None):
         if instance:
             return self.get_object_or_id(instance)
-        return self.field_inst
+        return self.field_inst # pragma: no cover
 
     def __set__(self, instance, value):
+        field_name = self.field_name
         if isinstance(value, self.foreign_model):
             foreign_key = value.get_id()
             if not foreign_key:
-                raise DoesNotExist(f'Foreign key {self.field_name} is null')
-            instance._data[self.field_name] = foreign_key
-            instance._obj_cache[self.field_name] = value
+                raise DoesNotExist(f'Foreign key {field_name} is null')
+            instance._data[field_name] = foreign_key
+            instance._obj_cache[field_name] = value
         else:
-            instance._data[self.field_name] = value
+            instance._data[field_name] = value
+        instance._dirty[field_name] = True
 
 class BackRefDescriptor(object):
     def __init__(self, field):
@@ -129,7 +135,7 @@ class BackRefDescriptor(object):
     def __get__(self, instance, instance_type=None):
         if instance:
             return self.foreign_model.select().where(self.field_inst == instance.get_id())
-        return self
+        return self # pragma: no cover
 
 #Used for overloading arithmetic operators
 def arith_op(op, reverse=False):
@@ -150,7 +156,7 @@ class Field(object):
         self.index = index
         self.unique = unique
         self.null = null
-        self.stringify = False
+        self.bytes_store = False
     
     def __eq__(self, other):
         return ((other.__class__ == self.__class__) and (other.name == self.name) and 
@@ -162,28 +168,12 @@ class Field(object):
     def check_type(self, value):
         return True
 
-    def add_to_class(self, klass, name, stringify=False):
+    def add_to_class(self, klass, name, bytes_store=False):
         self.name = name
         self.model = klass
-        self.stringify = stringify
+        self.bytes_store = bytes_store
         klass._meta.fields[name] = self
         setattr(klass, name, FieldDescriptor(self))
-
-    def _db_value(self, value):
-        if self.stringify:
-            value = self.db_value(value)
-            return value if isinstance(value, bytes) else json.dumps(value).encode('utf-8')
-        else:
-            return self.db_value(value)
-
-    def _python_value(self, value):
-        if self.stringify:
-            try:
-                return self.python_value(json.loads(value))
-            except:
-                pass
-        
-        return self.python_value(value)
 
     def db_value(self, value):
         return value
@@ -240,13 +230,13 @@ class PrimaryKeyField(Field):
     def _generate_filter(self, op, other):
         other = self.model._meta.client.ensure_key(other)
         return Filter(self.model._meta.client.db_id_name(), op, other)
-    def _db_value(self, value):
-        if self.stringify:
+    def db_value(self, value):
+        if self.bytes_store:
             return value.encode('utf-8') if isinstance(value, str) else value
         else:
             return value
-    def _python_value(self, value):
-        if self.stringify:
+    def python_value(self, value):
+        if self.bytes_store:
             return value.decode('utf-8') if isinstance(value, bytes) else value
         else:
             return value
@@ -258,10 +248,10 @@ class ForeignKeyField(Field):
         self.backref = backref
         self.on_delete = on_delete
 
-    def add_to_class(self, klass, name, stringify=False):
+    def add_to_class(self, klass, name, bytes_store=False):
         self.name = name
         self.model = klass
-        self.stringify = stringify
+        self.bytes_store = bytes_store
         klass._meta.fields[name] = self
         setattr(klass, name, ForeignKeyDescriptor(self, self.foreign_model))
         self.foreign_model._meta.backref[self.backref or klass._meta.name + '_ref'] = self
@@ -271,18 +261,45 @@ class ForeignKeyField(Field):
     def db_value(self, value):
         if isinstance(value, self.foreign_model):
             value = value.get_id()
-        return super().db_value(value)
+        if self.bytes_store:
+            return value.encode('utf-8') if isinstance(value, str) else value
+        else:
+            return value
+    def python_value(self, value):
+        if self.bytes_store:
+            return value.decode('utf-8') if isinstance(value, bytes) else value
+        else:
+            return value    
 
     def _generate_filter(self, op, other):
         other = self.model._meta.client.ensure_key(other)
         return Filter(self.name, op, str(other))
 
 class BooleanField(Field):
-    pass
+    def db_value(self, value):
+        if self.bytes_store:
+            return str(bool(value)).encode('utf-8') if value is not None else b'None'
+        else:
+            return value
+    def python_value(self, value):
+        if self.bytes_store:
+            return {b'True': True, b'None': None}.get(value, False)
+        else:
+            return value
 
 class IntegerField(Field):
     def check_type(self, value):
         return isinstance(value, int)
+    def db_value(self, value):
+        if self.bytes_store:
+            return str(int(value)).encode('utf-8') if value is not None else b''
+        else:
+            return value
+    def python_value(self, value):
+        if self.bytes_store:
+            return int(value.decode('utf-8')) if value else None
+        else:
+            return int(value) if value is not None else None
 
 BigIntegerField = IntegerField
 SmallIntegerField = IntegerField
@@ -292,14 +309,34 @@ IPField = IntegerField
 
 class FloatField(Field):
     def check_type(self, value):
-        return isinstance(value, float)
+        return isinstance(value, (int, float))
+    def db_value(self, value):
+        if self.bytes_store:
+            return str(float(value)).encode('utf-8') if value is not None else b''
+        else:
+            return value
+    def python_value(self, value):
+        if self.bytes_store:
+            return float(value.decode('utf-8')) if value else None
+        else:
+            return float(value) if value is not None else None
 
 DoubleField = FloatField
 DecimalField = FloatField
 
 class CharField(Field):
     def check_type(self, value):
-        return isinstance(value, str)
+        return isinstance(value, (str, bytes))
+    def db_value(self, value):
+        if self.bytes_store:
+            return value.encode('utf-8') if isinstance(value, str) else value
+        else:
+            return value
+    def python_value(self, value):
+        if self.bytes_store:
+            return value.decode('utf-8') if value is not None else None
+        else:
+            return value
 
 TextField = CharField
 FixedCharField = CharField
@@ -308,48 +345,39 @@ UUIDField = CharField
 class BlobField(Field):
     def check_type(self, value):
         return isinstance(value, bytes)
-    def _db_value(self, value):
+    def db_value(self, value):
         return value
-    def _python_value(self, value):
+    def python_value(self, value):
         return value
 
 class DateTimeField(Field):
     def check_type(self, value):
         return isinstance(value, datetime.datetime)
     def db_value(self, value):
-        return value.isoformat() if value and self.stringify else value
-    def python_value(self, value):
-        if value and self.stringify:
-            return datetime.datetime.fromisoformat(value)
+        if self.bytes_store:
+            return value.isoformat().encode('utf-8') if value is not None else b''
         else:
             return value
-
-class DateField(Field):
-    def check_type(self, value):
-        return isinstance(value, datetime.date)
-    def db_value(self, value):
-        return value.isoformat() if value and self.stringify else value
     def python_value(self, value):
-        if value and self.stringify:
-            return datetime.date.fromisoformat(value)
-        else:
-            return value
-
-class TimeField(Field):
-    def check_type(self, value):
-        return isinstance(value, datetime.time)
-    def db_value(self, value):
-        return value.isoformat() if value and self.stringify else value
-    def python_value(self, value):
-        if value and self.stringify:
-            return datetime.datetime.fromisoformat(value).time()
+        if self.bytes_store:
+            return datetime.datetime.fromisoformat(value.decode('utf-8')) if value else None
         else:
             return value
 
 class JSONField(Field):
     def check_type(self, value):
-        json_types = [bool, int, float, str, list, dict, tuple]
+        json_types = [type(None), bool, int, float, str, list, dict, tuple]
         return any(isinstance(value, json_type) for json_type in json_types)
+    def db_value(self, value):
+        if self.bytes_store:
+            return json.dumps(value).encode('utf-8')
+        else:
+            return value
+    def python_value(self, value):
+        if self.bytes_store:
+            return json.loads(value.decode('utf-8')) if value else None
+        else:
+            return value
 
     @classmethod
     def list_default(cls):

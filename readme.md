@@ -4,7 +4,7 @@
 
 
 The weedata is a python ODM/ORM module for Google Cloud Datastore / MongoDB / redis, featuring a compatible interface with [Peewee](https://github.com/coleifer/peewee).    
-It has limited features, with a primary focus on compatibility with the Peewee API.    
+The main priority of this library is to ensure compatibility with the Peewee API.    
 If you don't use advanced SQL features such as multi-table join queries and more, you can easily switch between SQL and NoSQL without modifying your application code.    
 I know using NoSQL as if it were SQL is not a very smart idea, but it can achieve maximum compatibility with various databases, so, just choose what you like.    
 
@@ -37,9 +37,9 @@ db = SqliteDatabase(dbName)
 ```
 to one of the following lines:
 ```
-db = DatastoreClient(project="project id")
+db = DatastoreClient(project="AppId")
 db = MongoDbClient(dbName, "mongodb://localhost:27017/")
-db = RedisDbClient("project id", "redis://127.0.0.1:6379/")
+db = RedisDbClient("AppId", "redis://127.0.0.1:6379/")
 ```
 
 
@@ -82,12 +82,23 @@ RedisDbClient(project, host='127.0.0.1', port=6379, db=0, password=None, key_sep
 ```
 
 > **Important Notice:**
-> Redis functions as an in-memory database. Although it includes disk persistence capabilities, this feature does not ensure complete data integrity and presents a potential risk of data loss. Prior to implementing Redis as a storage database, it is crucial to grasp pertinent knowledge and configure it appropriately, including enabling RDB (Redis Database) or AOF (Append Only File) functionality.
+> 1. Redis functions as an in-memory database. Although it includes disk persistence capabilities, this feature does not ensure complete data integrity and presents a potential risk of data loss. Prior to implementing Redis as a storage database, it is crucial to grasp pertinent knowledge and configure it appropriately, including enabling RDB (Redis Database) or AOF (Append Only File) functionality.
 For example, you can add two lines in redis.conf:
 ```
 appendonly yes
 appendfsync always
 ```
+
+> 2. It is only suitable for applications with very small data volumes because weedata does not optimize queries for Redis, necessitating a full table scan for each query. For larger data volumes, it is recommended to utilize MongoDB or Datastore instead.   
+
+
+### PickleDbClient
+weedata also provides a simple database implementation PickleDbClient using Python's pickle library, which can be used for testing purposes and in applications with limited resources and low data integrity requirements.   
+The parameter "dbName" is the filename of pickle file, if set to ":memory:", an in-memory database is created.  
+```
+PickleDbClient(dbName, bakBeforeWrite=True)
+```
+
 </details>
 
 
@@ -98,16 +109,16 @@ appendfsync always
 ```
 from weedata import *
 
-db = DatastoreClient(project="project id")
-db = MongoDbClient("project id", "mongodb://localhost:27017/")
-db = RedisDbClient("project id", "redis://127.0.0.1:6379/")
+db = DatastoreClient(project="AppId")
+db = MongoDbClient("AppId", "mongodb://localhost:27017/")
+db = RedisDbClient("AppId", "redis://127.0.0.1:6379/")
 
 class Person(Model):
     class Meta:
         database = db
 
     name = CharField()
-    birthday = DateField()
+    birthday = DateTimeField()
 ```
 
 The best practice is to define a base class that connects to the database, and then have other models within your application inherit from it.
@@ -119,7 +130,7 @@ class MyBaseModel(Model):
 
 class Person(MyBaseModel):
     name = CharField()
-    birthday = DateField()
+    birthday = DateTimeField()
 
 class Message(MyBaseModel):
     context = TextField()
@@ -135,16 +146,16 @@ class Message(MyBaseModel):
 Let's begin by populating the database with some people. We will use the save() and create() methods to add and update people's records.
 
 ```
-from datetime import date
-uncle_bob = Person(name='Bob', birthday=date(1960, 1, 15))
+from datetime import datetime
+uncle_bob = Person(name='Bob', birthday=datetime(1960, 1, 15))
 uncle_bob.save()
 ```
 
 You can also add a person by calling the create() method, which returns a model instance. The insert_many() function is a convenient method for adding many data at once:
 
 ```
-grandma = Person.create(name='grandma', birthday=date(1935, 3, 1))
-Person.insert_many([{'name':'Herb', 'birthday':date(1950, 5, 5)}, {'name':'Adam', 'birthday':date(1990, 9, 1)}])
+grandma = Person.create(name='grandma', birthday=datetime(1935, 3, 1))
+Person.insert_many([{'name':'Herb', 'birthday':datetime(1950, 5, 5)}, {'name':'Adam', 'birthday':datetime(1990, 9, 1)}])
 ```
 </details>
 
@@ -176,7 +187,7 @@ grandma.save()  # Update grandma's name in the database.
 
 Person.update({Person.name: 'Grandma L.'}).where(Person.name == 'Grandma').execute() #Changing to other name
 Person.update(name='Grandma').where(Person.name == 'Grandma').execute() #Changing to other name
-Person.update({Person.name: 'Dear. ' + Person.name}).where(Person.birthday > date(1950, 5, 5)).execute() #Adding a title of respect before someone's name
+Person.update({Person.name: 'Dear. ' + Person.name}).where(Person.birthday > datetime(1950, 5, 5)).execute() #Adding a title of respect before someone's name
 # update statement supports: +, -, *, /, //, %, **, <<, >>, &, |, ^
 ```
 
@@ -184,7 +195,7 @@ To delete one or many instances from database:
 
 ```
 herb.delete_instance()
-Person.delete().where(Person.birthday < date(1950, 5, 4)).execute()
+Person.delete().where(Person.birthday < datetime(1950, 5, 4)).execute()
 ```
 
 To remove the whole collection(MongoDb)/kind(datastore), you can use:
@@ -245,7 +256,7 @@ for person in Person.select().where(Person.birthday <= date(1960, 1, 15)):
 Let's make sure these are sorted alphabetically by adding an order_by() clause:
 
 ```
-for person in Person.select().where(Person.birthday <= date(1960, 1, 15)).order_by(Person.name):
+for person in Person.select().where(Person.birthday <= datetime(1960, 1, 15)).order_by(Person.name):
     print(person.name)
 
 for person in Person.select().order_by(Person.birthday.desc()):
@@ -259,8 +270,8 @@ for person in Person.select().order_by(Person.birthday.desc()):
 People whose birthday is between 1940 and 1960 (inclusive of both years):
 
 ```
-d1940 = date(1940, 1, 1)
-d1960 = date(1960, 1, 1)
+d1940 = datetime(1940, 1, 1)
+d1960 = datetime(1960, 1, 1)
 query = Person.select().where((Person.birthday > d1940) & (Person.birthday < d1960))
 for person in query:
     print(person.name, person.birthday)
@@ -278,6 +289,7 @@ query = Person.select().where(~((Person.birthday < d1940) | (Person.birthday > d
 <details>
 
 ## Field types supported:
+* BooleanField
 * IntegerField
 * BigIntegerField
 * SmallIntegerField
@@ -289,8 +301,10 @@ query = Person.select().where(~((Person.birthday < d1940) | (Person.birthday > d
 * TextField
 * BlobField
 * UUIDField
+* DateTimeField
 * JSONField
 * ForeignKeyField
+* PrimaryKeyField
 
 
 ## Reserved field names
@@ -342,29 +356,15 @@ class House(Model):
 
 
 
-## Creating a custom field
-It is easy to add support for custom field types in weedata. In this example we will create a StringyBooleanField.
-
-```
-class StringyBooleanField(Field):
-    def db_value(self, value): #The return value will be stored in database
-        return "True" if value else "False"
-
-    def python_value(self, value): #The return value will be used in python app code
-        return value == "True"
-```
-
-
-
 ## Model options and table metadata
 In order not to pollute the model namespace, model-specific configuration is placed in a special class called Meta (a convention borrowed from the django framework):
 
 ```
-db = MongoDbClient("project id", "mongodb://localhost:27017/")
+db = MongoDbClient("AppId", "mongodb://localhost:27017/")
 
 class Person(Model):
     name = CharField()
-    birthday = DateField()
+    birthday = DateTimeField()
 
     class Meta:
         database = db
@@ -462,11 +462,12 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 <details>
 
 * v0.2.0 (unreleased yet)
-1. supports Redis
-2. supports ForeignKeyField
-3. Add Model.replace() and Model.get_or_create() method
-4. [MongoDB] Auto create index when field with attr index=True or unique=True
-5. fix DoesNotExist not found error
+1. Supports Redis
+2. Add a simple implementation PickleDbClient
+3. Supports ForeignKeyField
+4. Add Model.replace() and Model.get_or_create() method
+5. [MongoDB] Auto create index when field with attr index=True or unique=True
+6. Fix DoesNotExist not found error
 
 * v0.1.0
 Initial version

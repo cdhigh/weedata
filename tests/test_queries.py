@@ -67,14 +67,23 @@ class TestQueryExecution(ModelTestCase):
         user = User.get(User.name=='user6')
         self.assertEqual(user.name, 'user6')
 
-    def test_selection(self):
+    def test_order_by(self):
         query = list(User.select())
         self.assertEqual(len(query), 6)
         query = list((Tweet.select().order_by(Tweet.liked)))
-        self.assertEqual(query[0].dicts(remove_id=True), {'user_id':self.ids[1], 'content': 'java', 'liked': 2, 'disliked': 6})
-        self.assertEqual(query[1].dicts(remove_id=True), {'user_id':self.ids[4], 'content': 'machinelearning', 'liked': 3, 'disliked': 15})
+        self.assertEqual(query[0].dicts(remove_id=True), 
+            {'user_id':self.ids[1], 'content': 'java', 'liked': 2, 'disliked': 6})
+        self.assertEqual(query[1].dicts(remove_id=True), 
+            {'user_id':self.ids[4], 'content': 'machinelearning', 'liked': 3, 'disliked': 15})
+        query = list((User.select().order_by(User.name.desc())))
+        self.assertEqual(query[0].name, 'user6')
+        self.assertEqual(query[1].name, 'user5')
+
+    def test_limit(self):
         query = list(User.select().limit(2))
         self.assertEqual(len(query), 2)
+        query = list(User.select().execute(limit=3))
+        self.assertEqual(len(query), 3)
 
     def test_select_first_get(self):
         query = User.select().order_by(User.day)
@@ -101,7 +110,6 @@ class TestQueryExecution(ModelTestCase):
         contents = set([t.content for t in ts])
         self.assertEqual(contents, set(['algorithm', 'python', 'agile']))
     
-    #@requires_mongodb
     def test_select_and(self):
         user = User.select().where((User.name != 'user1') & (User.name != 'user2')).first()
         self.assertTrue((user.name != 'user1') and (user.name != 'user2'))
@@ -109,6 +117,10 @@ class TestQueryExecution(ModelTestCase):
         users = list(User.select().where((User.name == 'user1') | (User.name == 'user2') | (User.name == 'user3')))
         names = set([u.name for u in users])
         self.assertTrue(names ==  set(['user1', 'user2', 'user3']))
+
+        users = list(User.select().where((User.name == 'user1'), (User.name == 'user1'), (User.name == 'user1')))
+        names = set([u.name for u in users])
+        self.assertTrue(names ==  set(['user1']))
 
         users = list(User.select().where(((User.name == 'user1') | (User.name == 'user2')) & (User.name == 'user3')))
         self.assertTrue(not users)
@@ -123,7 +135,10 @@ class TestQueryExecution(ModelTestCase):
         names = set([u.name for u in users])
         self.assertTrue(names ==  set(['user4', 'user5', 'user6']))
 
-    #@requires_mongodb
+        users = User.select().where((User.name != 'user1'), (User.name != 'user2'), (User.name != 'user3'))
+        names = set([u.name for u in users])
+        self.assertTrue(names ==  set(['user4', 'user5', 'user6']))
+
     def test_select_or(self):
         usernames = set([user.name for user in User.select().where((User.name == 'user4') | (User.name == 'user3'))])
         self.assertEqual(usernames, set(['user4', 'user3']))
@@ -132,7 +147,7 @@ class TestQueryExecution(ModelTestCase):
         names = [u.name for u in users]
         self.assertEqual(names, ['user1', 'user6'])
 
-    @requires_mongodb
+    @skip_if_datastore
     def test_select_nor(self):
         usernames = set([user.name for user in User.select().where(~(User.name == 'user4'))])
         self.assertEqual(usernames, set(['user1', 'user2', 'user3', 'user5', 'user6']))
@@ -147,14 +162,12 @@ class TestQueryExecution(ModelTestCase):
         names = [u.name for u in users]
         self.assertEqual(names, ['user2', 'user3', 'user4', 'user5'])
 
-    #@requires_mongodb
     def test_select_different_field(self):
-        query = User.select().where((User.name != 'user1') & (User.email != 'user2@e.com') & (User.times == 0))
+        query = User.select().where((User.name != 'user1'), (User.email != 'user2@e.com'), (User.times == 0))
         self.assertEqual(query.first().name, 'user6')
         query = User.select().where(((User.name > 'user3') | (User.email >= 'user6@e.com')) & (User.times == 0))
         self.assertEqual(query.first().name, 'user6')
 
-    @requires_mongodb
     def test_select_count(self):
         self.assertEqual(User.select().count(), len(self.users))
         self.assertEqual(Tweet.select().count(), len(self.t_ids))
@@ -165,7 +178,7 @@ class TestQueryExecution(ModelTestCase):
         query = Tweet.select().where(Tweet.content == 'foo')
         self.assertEqual(query.count(), 0)
 
-    #@requires_mongodb
+    @requires_mongodb
     def test_select_partial(self):
         query = list(User.select(User.id))
         self.assertEqual(query[0].dicts()['name'], None)

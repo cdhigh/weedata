@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-#an ORM/ODM for Google Cloud Datastore/MongoDB, featuring a compatible interface with Peewee.
+#an ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 import copy
@@ -13,7 +13,7 @@ class BaseModel(type):
 
     def __new__(cls, name, bases, attrs):
         if not bases:
-            return super(BaseModel, cls).__new__(cls, name, bases, attrs)
+            return super(BaseModel, cls).__new__(cls, name, bases, attrs) # pragma: no cover
 
         meta_options = {}
         meta = attrs.pop('Meta', None)
@@ -47,10 +47,10 @@ class BaseModel(type):
         cls._dirty = None
 
         # replace the fields with field descriptors, calling the add_to_class hook
-        stringify = meta_options['client'].stringifyStore if meta_options['client'] else False
+        bytes_store = meta_options['client'].bytes_store if meta_options['client'] else False
         for name, attr in cls.__dict__.items():
             if isinstance(attr, Field):
-                attr.add_to_class(cls, name, stringify)
+                attr.add_to_class(cls, name, bytes_store)
                 if attr.index or attr.unique:
                     cls._meta.indexes.append(name)
         
@@ -154,7 +154,7 @@ class Model(object, metaclass=BaseModel):
     def get_or_none(cls, query=None):
         try:
             return cls.get(query)
-        except:
+        except: # pragma: no cover
             return None
 
     @classmethod
@@ -170,7 +170,7 @@ class Model(object, metaclass=BaseModel):
         return cls.delete().filter_by_id(pk).execute()
         
     def save(self, **kwargs):
-        return self.set_id(self.client.update_one(self))
+        return self.client.update_one(self)
         
     def delete_instance(self, **kwargs):
         #on delete cascade
@@ -199,8 +199,10 @@ class Model(object, metaclass=BaseModel):
         for name, field in self._meta.fields.items():
             if not should_skip(name) and (not only_dirty or self._dirty.get(name, False)):
                 value = getattr(self, name, None)
-                if db_value or isinstance(field, ForeignKeyField):
-                    value = field._db_value(value)
+                if value and isinstance(field, ForeignKeyField) and isinstance(value, Model):
+                    value = value.get_id()
+                if db_value:
+                    value = field.db_value(value)
                 data[name] = value
 
         if kwargs.get('remove_id'):
@@ -212,8 +214,8 @@ class Model(object, metaclass=BaseModel):
     @classmethod
     def bind(cls, client):
         cls._meta.client = client
-        for field in klass._meta.fields.value():
-            field.stringify = client.stringifyStore
+        for field in cls._meta.fields.values():
+            field.bytes_store = client.bytes_store
     
     #Used for create index
     #MongoDB Create index commands will not recreate existing indexes and 
@@ -224,13 +226,6 @@ class Model(object, metaclass=BaseModel):
             if field.index or field.unique:
                 cls._meta.client.create_index(cls, field.name, 
                     unique=field.unique, background=True)
-
-    @classmethod
-    def drop_table(cls, **kwargs):
-        self.client.drop_table(cls._meta.name)
-
-    def atomic(self, **kwargs):
-        return self.client.transaction(**kwargs)
 
     def clear_dirty(self, field_name):
         field_name = field_name if isinstance(field_name, list) else [field_name]

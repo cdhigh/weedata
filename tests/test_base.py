@@ -17,6 +17,8 @@ def new_connection(**kwargs):
         return MongoDbClient("weedata_test", "mongodb://127.0.0.1:27017/")
     elif backEnd == 'redis':
         return RedisDbClient("weedata", "redis://127.0.0.1:6379/")
+    elif backEnd == 'pickle':
+        return PickleDbClient(':memory:')
     else:
         return DatastoreClient(project="kindleear")
 
@@ -29,7 +31,7 @@ class TestModel(Model):
 class Person(TestModel):
     first = CharField()
     last = CharField()
-    dob = DateField(index=True)
+    dob = DateTimeField(index=True)
 
 class Note(TestModel):
     author = CharField()
@@ -217,7 +219,16 @@ def slow_test():
     return decorator
 
 def requires_mongodb(method):
-    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND', 'mongodb') == 'mongodb', 'requires mongodb')(method)
+    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND') == 'mongodb', 'requires mongodb')(method)
 
 def requires_datastore(method):
-    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND', 'mongodb') == 'datastore', 'requires datastore')(method)
+    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND') == 'datastore', 'requires datastore')(method)
+
+def requires_redis(method):
+    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND') == 'redis', 'requires redis')(method)
+
+def requires_pickle(method):
+    return skip_unless(os.getenv('WEEDATA_TEST_BACKEND') == 'pickle', 'requires pickle')(method)    
+
+def skip_if_datastore(method):
+    return skip_if(os.getenv('WEEDATA_TEST_BACKEND') == 'datastore', 'skip if datastore')(method)

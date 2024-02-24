@@ -82,12 +82,6 @@ class TestBooleanField(ModelTestCase):
             ('n', None),
             ('t', True)])
 
-
-class DateModel(TestModel):
-    date = DateField(null=True)
-    time = TimeField(null=True)
-    date_time = DateTimeField(null=True)
-
 class U2(TestModel):
     username = TextField()
 
@@ -119,26 +113,40 @@ class Item(TestModel):
 
 class ListField(TextField):
     def db_value(self, value):
-        return ','.join(value) if value else ''
+        if self.bytes_store:
+            return ','.join(value).encode('utf-8') if value is not None else b'None'
+        else:
+            return ','.join(value) if value else ''
 
     def python_value(self, value):
-        return value.split(',') if value else []
+        if self.bytes_store:
+            if value in [None, b'None']:
+                return None
+            elif value:
+                return value.decode('utf-8').split(',')
+            else:
+                return []
+        else:
+            return value.split(',') if value else []
 
 class Todo(TestModel):
     content = TextField()
     tags = ListField()
+    jtags = JSONField()
 
 class TestCustomField(ModelTestCase):
     requires = [Todo]
     def test_custom_field(self):
-        t1 = Todo.create(content='t1', tags=['t1-a', 't1-b'])
-        t2 = Todo.create(content='t2', tags=[])
+        t1 = Todo.create(content='t1', tags=['t1-a', 't1-b'], jtags=['t1-a', 't1-b'])
+        t2 = Todo.create(content='t2', tags=[], jtags=[])
 
         t1_db = Todo.get(Todo.id == t1.id)
         self.assertEqual(t1_db.tags, ['t1-a', 't1-b'])
+        self.assertEqual(t1_db.jtags, ['t1-a', 't1-b'])
 
         t2_db = Todo.get(Todo.id == t2.id)
         self.assertEqual(t2_db.tags, [])
+        self.assertEqual(t2_db.jtags, [])
 
 class SM(TestModel):
     text_field = TextField()
@@ -155,8 +163,8 @@ class TestStringFields(ModelTestCase):
         su = SM.create(text_field=udata, char_field=udata)
 
         sb_db = SM.get(SM.id == sb.id)
-        self.assertEqual(sb_db.text_field, b'b1')
-        self.assertEqual(sb_db.char_field, b'b1')
+        self.assertIn(sb_db.text_field, [b'b1', 'b1'])
+        self.assertIn(sb_db.char_field, [b'b1', 'b1'])
 
         su_db = SM.get(SM.id == su.id)
         self.assertEqual(su_db.text_field, 'u1')
@@ -205,9 +213,9 @@ class TestForeignKeyField(ModelTestCase):
         Tweet.create(content='hiss', user=huey)
 
         query = Tweet.select().order_by(Tweet.content)
-        self.assertEqual([(tweet.content, tweet.user.username)
-                          for tweet in query],
+        self.assertEqual([(tweet.content, tweet.user.username) for tweet in query],
                          [('hiss', 'huey'), ('meow', 'huey')])
+        self.assertEqual(set([t.content for t in huey.tweets]), set(['meow', 'hiss']))
 
         self.assertRaises(AttributeError, lambda: Tweet.user.foo)
 
@@ -232,9 +240,50 @@ class TestForeignKeyField(ModelTestCase):
         self.assertEqual(cnt, 3)
         self.assertEqual(T2.select().count(), 6)
 
-        U2.delete().where(U2.username == 'u2').execute()
+        u2 = U2.get(username='u2')
+        u2.delete_instance()
         self.assertEqual(T2.select().count(), 3)
 
         self.assertEqual(T2.select().where(T2.user == users[0]).count(), 0)
         self.assertEqual(T2.select().where(T2.user == users[1]).count(), 0)
         self.assertEqual(T2.select().where(T2.user == users[2]).count(), 3)
+
+
+class EfModel(TestModel):
+    i = IntegerField(enforce_type=True, default=0)
+    f = FloatField(enforce_type=True, default=0.0)
+    c = CharField(enforce_type=True, default='')
+    b = BlobField(enforce_type=True, default=b'')
+    dt = DateTimeField(enforce_type=True, default=datetime.datetime.now)
+    j1 = JSONField(enforce_type=True, default=JSONField.list_default)
+    j2 = JSONField(enforce_type=True, default=JSONField.dict_default)
+
+class TestEnforcedField(ModelTestCase):
+    requires = [EfModel]
+
+    def test_enforce_type(self):
+        with self.assertRaisesCtx(ValueError):
+            EfModel.create(i='10')
+        with self.assertRaisesCtx(ValueError):
+            EfModel.create(f='10.0')
+        with self.assertRaisesCtx(ValueError):
+            EfModel.create(c=1)
+        with self.assertRaisesCtx(ValueError):
+            EfModel.create(b='str')
+        with self.assertRaisesCtx(ValueError):
+            EfModel.create(dt='str')
+        with self.assertRaisesCtx(ValueError):
+            EfModel.create(j1=EfModel)
+        with self.assertRaisesCtx(ValueError):
+            EfModel.create(j2=EfModel)
+
+class DtModel(TestModel):
+    dt = DateTimeField(enforce_type=True, default=datetime.datetime.now)
+    
+class TestDateTimeField(ModelTestCase):
+    requires = [DtModel]
+
+    def test_date_time(self):
+        now = datetime.datetime.now().replace(microsecond=0)
+        dt = DtModel.create(dt=now)
+        self.assertEqual(DtModel.get(dt=now).dt, now)

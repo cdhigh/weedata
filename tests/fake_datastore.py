@@ -74,6 +74,8 @@ class datastore:
                 self.delete(key)
         def query(self, kind, ancestor=None):
             return DBQuery(kind)
+        def aggregation_query(self, query):
+            return AggreQueryBuilder(query)
 
         def transaction(self, **args):
             class Transaction:
@@ -198,6 +200,49 @@ class DBQuery:
         
         else:
             raise ValueError(f"Unsupported query type: {type(query)}")
+
+class AggreQueryResult:
+    def __init__(self, value):
+        self.value = value
+        self.iterated = False
+    def __iter__(self):
+        return self
+    def __next__(self):
+        if not self.iterated:
+            self.iterated = True
+            return self
+        else:
+            raise StopIteration
+    def __enter__(self, *args, **kwargs):
+        return self
+    def __exit__(self, *args, **kwargs):
+        pass
+
+class AggreQuery:
+    def __init__(self, query, type_, field=None):
+        self.query = query
+        self.type_ = type_
+        self.field = field
+    def fetch(self):
+        results = self.query.fetch()
+        if self.type_ == 'count':
+            value = len(list(results))
+        elif self.type_ == 'sum':
+            value = sum([r[1].get(field, 0) for r in results])
+        else:
+            data = [r[1].get(field, 0) for r in results]
+            value = sum(data) / len(data) if data else 0
+        return AggreQueryResult(value)
+
+class AggreQueryBuilder:
+    def __init__(self, query):
+        self.query = query
+    def count(self):
+        return AggreQuery(self.query, 'count')
+    def sum(self, field):
+        return AggreQuery(self.query, 'sum', field)
+    def avg(self, field):
+        return AggreQuery(self.query, 'avg', field)
 
 class QueryResult:
     def __init__(self, results):
