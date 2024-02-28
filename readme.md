@@ -3,7 +3,7 @@
 [![PyPI version shields.io](https://img.shields.io/pypi/v/weedata.svg)](https://pypi.python.org/pypi/weedata/) ![python](https://img.shields.io/badge/python-3.6+-blue) [![License: MIT](https://img.shields.io/badge/License-MIT%20-blue.svg)](https://github.com/cdhigh/weedata/blob/main/LICENSE)
 
 
-The weedata is a python ODM/ORM module for Google Cloud Datastore / MongoDB / redis, featuring a compatible interface with [Peewee](https://github.com/coleifer/peewee).    
+The weedata is a python ODM/ORM module for Google Cloud Datastore / MongoDB / Redis, featuring a compatible interface with [Peewee](https://github.com/coleifer/peewee).    
 The main priority of this library is to ensure compatibility with the Peewee API.    
 If you don't use advanced SQL features such as multi-table join queries and more, you can easily switch between SQL and NoSQL without modifying your application code.    
 I know using NoSQL as if it were SQL is not a very smart idea, but it can achieve maximum compatibility with various databases, so, just choose what you like.    
@@ -47,7 +47,7 @@ db = RedisDbClient("AppId", "redis://127.0.0.1:6379/")
 ## Installation
 <details>
 
-weedata supports Google Cloud Datastore and MongoDB.    
+weedata supports Google Cloud Datastore, MongoDB and Redis.    
 To use Google Cloud Datastore, you need to install google-cloud-datastore [optional, only install if need].   
 To use MongoDB, you need to install pymongo [optional, only install if need].   
 
@@ -56,8 +56,8 @@ To use redis, you need to install Redis-py [optional, only install if need].
 ```
 pip install google-cloud-datastore
 pip install pymongo
-pip install weedata
 pip install redis
+pip install weedata
 ```
 
 
@@ -68,28 +68,26 @@ API signature: DatastoreClient(project=None, namespace=None, credentials=None, \
 ```
 
 ### MongoDbClient
-weedata uses pymongo as the underlying MongoDB driver. After correctly installing the MongoDB service and pymongo, create a client following this API signature.
+weedata uses pymongo as the MongoDB driver. After correctly installing the MongoDB service and pymongo, create a client following this API signature.
 The parameter 'project' corresponds to the MongoDB database name, and 'host' can be passed as complete database url.
 ```
-MongoDbClient(project, host='127.0.0.1', port=27017, username=None, password=None
+MongoDbClient(project, dbUrl='mongodb://127.0.0.1:27017/')
 ```
 
 ### RedisDbClient
-weedata uses redis-py as the underlying redis driver. After correctly installing the redis service and redis-py, create a client following this API signature.  
-The parameter 'project' corresponds to the redis key prefix, and 'host' can be passed as complete database url, you can also choose which db to be used by passing the parameter 'db', it's range is [0-15].
+weedata uses redis-py as the redis driver. After correctly installing the redis service and redis-py, create a client following this API signature.  
+The parameter 'project' corresponds to the redis key prefix, and 'host' can be passed as complete database url, you can also choose which db to be used by passing the parameter 'db', the range is [0-15].
 ```
-RedisDbClient(project, host='127.0.0.1', port=6379, db=0, password=None, key_sep=':')
+RedisDbClient(project, dbUrl='redis://127.0.0.1:6379/0', key_sep=':')
 ```
 
 > **Important Notice:**
-> 1. Redis functions as an in-memory database. Although it includes disk persistence capabilities, this feature does not ensure complete data integrity and presents a potential risk of data loss. Prior to implementing Redis as a storage database, it is crucial to grasp pertinent knowledge and configure it appropriately, including enabling RDB (Redis Database) or AOF (Append Only File) functionality.
+> Redis functions as an in-memory database. Although it includes disk persistence capabilities, this feature does not ensure 100% data integrity and presents a potential risk of data loss. Prior to implementing Redis as a storage database, it is crucial to grasp pertinent knowledge and configure it appropriately, including enabling RDB (Redis Database) or AOF (Append Only File) functionality.
 For example, you can add two lines in redis.conf:
 ```
 appendonly yes
 appendfsync always
 ```
-
-> 2. It is only suitable for applications with very small data volumes because weedata does not optimize queries for Redis, necessitating a full table scan for each query. For larger data volumes, it is recommended to utilize MongoDB or Datastore instead.   
 
 
 ### PickleDbClient
@@ -111,7 +109,7 @@ from weedata import *
 
 db = DatastoreClient(project="AppId")
 db = MongoDbClient("AppId", "mongodb://localhost:27017/")
-db = RedisDbClient("AppId", "redis://127.0.0.1:6379/")
+db = RedisDbClient("AppId")
 
 class Person(Model):
     class Meta:
@@ -135,6 +133,15 @@ class Person(MyBaseModel):
 class Message(MyBaseModel):
     context = TextField()
     read_count = IntegerField(default=0)
+```
+
+Or you can setup or change database connection dynamically by using bind method.
+```
+Person.bind(db)
+Message.bind(db)
+
+#or
+db.bind([Person, Message])
 ```
 
 </details>
@@ -170,6 +177,7 @@ You can count the number of rows in any select query:
 Tweet.select().count()
 Tweet.select().where(Tweet.id > 50).count()
 ```
+
 </details>
 
 
@@ -183,7 +191,7 @@ Or you can use an update statement that supports all standard arithmetic operato
 
 ```
 grandma.name = 'Grandma'
-grandma.save()  # Update grandma's name in the database.
+grandma.save()
 
 Person.update({Person.name: 'Grandma L.'}).where(Person.name == 'Grandma').execute() #Changing to other name
 Person.update(name='Grandma').where(Person.name == 'Grandma').execute() #Changing to other name
@@ -245,9 +253,6 @@ Let's list all the people in the database:
 ```
 for person in Person.select():
     print(person.name)
-
-for person in Person.select().where(Person.birthday <= date(1960, 1, 15)):
-    print(person.name)
 ```
 
 
@@ -271,14 +276,14 @@ People whose birthday is between 1940 and 1960 (inclusive of both years):
 
 ```
 d1940 = datetime(1940, 1, 1)
-d1960 = datetime(1960, 1, 1)
-query = Person.select().where((Person.birthday > d1940) & (Person.birthday < d1960))
+d1960 = datetime(1960, 12, 31)
+query = Person.select().where((Person.birthday >= d1940) & (Person.birthday <= d1960))
 for person in query:
     print(person.name, person.birthday)
 
-#alternative methods
+
 query = Person.select().where(Person.birthday.between(d1940, d1960))
-query = Person.select().where(Person.birthday > d1940).where(Person.birthday < d1960)
+query = Person.select().where(Person.birthday >= d1940).where(Person.birthday <= d1960)
 query = Person.select().where((Person.birthday < d1940) | (Person.birthday > d1960))
 query = Person.select().where(~((Person.birthday < d1940) | (Person.birthday > d1960)))
 ```
@@ -325,7 +330,7 @@ Other parameters accepted by Peewee can be passed, weedata simply ignores them i
 
 
 ## Default field values
-weedata can provide default values for fields when objects are created. For example to have an IntegerField default to zero rather than NULL, you could declare the field with a default value:
+weedata can provide default values for fields when objects are created. For example to have an IntegerField default to zero rather than None, you could declare the field with a default value:
 
 ```
 class Message(Model):
@@ -340,20 +345,6 @@ class Message(Model):
     context = TextField()
     timestamp = DateTimeField(default=datetime.datetime.now)
 ```
-
-Note:
-If you are using a field that accepts a mutable type (list, dict, etc), and would like to provide a default, it is a good idea to wrap your default value in a simple function so that multiple model instances are not sharing a reference to the same underlying object:
-
-```
-def house_defaults():
-    return {'beds': 0, 'baths': 0}
-
-class House(Model):
-    number = TextField()
-    street = TextField()
-    attributes = JSONField(default=house_defaults)
-```
-
 
 
 ## Model options and table metadata
@@ -370,27 +361,16 @@ class Person(Model):
         database = db
 ```
 
-Once the class is defined, you should not access ModelClass.Meta, but instead use ModelClass.\_meta:
-
-```
-Person.Meta
-Traceback (most recent call last):
-  File "<stdin>", line 1, in <module>
-AttributeError: type object 'Person' has no attribute 'Meta'
-
-Person._meta
-<weedata.ModelOptions object at 0x7f51a2f03790>
-```
-
-The ModelOptions class implements several methods which may be of use for retrieving model metadata.
+Once the class is defined, you should not access ModelClass.Meta, but instead use ModelClass.\_meta.  
+The ModelOptions class implements several methods which may be of use for retrieving model metadata.  
 
 ```
 Person._meta.fields
 Person._meta.client
 ```
 Now, the ModelOptions accepts two parameters:
-* database: Indicating the backend database client instance to be used, if not set, you can call `Model.bind()` at run time.
-* primary_key: Optional, the name of the primary key at the underlying level of each database is different. For Datastore, it's called "key", for MongoDB, it's "\_id", To ensure compatibility with SQL and simplify application code, weedata automatically adds a primary key named 'id' with a string type. This primary key is only an application-level attribute variable and will not be saved to the underlying database.
+* **database**: Indicating the backend database client instance to be used, if not set, you can call `Model.bind()` or `db.bind() ` at run time.
+* **primary_key**: Optional, the name of the primary key at the underlying level of each database is different. It's called "key" in Datastore, for MongoDB, it's "\_id", to ensure compatibility with SQL and simplify application code, weedata automatically adds a primary key named 'id' with a string type. This primary key is only an application-level attribute variable and will not be saved to the underlying database.
 If this name conflicts with your application, you can use the "primary_key" attribute to modify it, for example:
 
 ```
@@ -398,6 +378,7 @@ class Meta
     database = db
     primary_key = 'id_'
 ```
+
 </details>
 
 # Querying
@@ -408,6 +389,7 @@ class Meta
 ```
 User.get_by_id('65bda09d6efd9b1130ffccb0')
 User.get(User.username == 'Charlie')
+User.get(username='Charlie')
 User.select().where(User.username.in_(['Charlie', 'Adam'])).order_by(User.birthday.desc()).get()
 ```
 
@@ -419,24 +401,26 @@ You can filter for particular records using normal python operators. weedata sup
 ### Query operators
 The following types of comparisons are supported by weedata:
 
-| Comparison     | Meaning                         |
-|----------------|---------------------------------|
-| ==             | x equals y                      |
-| !=             | x is not equal to y             |
-| <              | x is less than y                |
-| <=             | x is less than or equal to y    |
-| >              | x is greater than y             |
-| >=             | x is greater than or equal to y |
-| .in_(list)     | IN lookup                       |
-| .not_in(list)  | NOT IN lookup.                  |
-| &              | logical AND                     |
-| \|             | logical OR                      |
-| ~              | logical NOT (mongodb only)      |
+| Comparison          | Meaning                         |
+|---------------------|---------------------------------|
+| ==                  | x equals y                      |
+| !=                  | x is not equal to y             |
+| <                   | x is less than y                |
+| <=                  | x is less than or equal to y    |
+| >                   | x is greater than y             |
+| >=                  | x is greater than or equal to y |
+| .in_(list)          | IN lookup                       |
+| .not_in(list)       | NOT IN lookup.                  |
+| .between(v1, v2)    | Between lookup                  |
+| .startswith(prefix) | lookup using a string prefix    |
+| &                   | logical AND                     |
+| \|                  | logical OR                      |
+| ~                   | logical NOT (mongodb only)      |
 
 
 
 
-### Some extra examples
+## Some extra examples
 
 ```
 user = User.select().where(User.name == 'python').get()
@@ -447,8 +431,10 @@ users = User.select(User.name, User.score).where(User.name == 'python').execute(
 users = User.select().where(User.birthdate.between(datetime.datetime(2024,1,1), datetime.datetime(2024,2,1))).execute()
 user = User.select().where((User.name != 'python') & (User.name != 'cobra')).first()
 user = User.select().where(User.name != 'python').where(User.name != 'cobra').first()
-user = User.select().order_by(User.birthdate.desc(), User.score).limit(10).execute()
-user = User.select().where((User.name == 'python') | (User.name == 'cobra'))
+users = User.select().order_by(User.birthdate.desc(), User.score).limit(10).execute()
+users = User.select().where((User.name == 'python') | (User.name == 'cobra')).execute()
+users = list(User.get(User.age > 30))
+Tweet.select().where(Tweet.content.startswith('de'))
 
 User.update({User.score: User.att_days + (User.evaluation * 2)}).where(User.age < 10).execute()
 
@@ -463,11 +449,13 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 * v0.2.0 (unreleased yet)
 1. Supports Redis
-2. Add a simple implementation PickleDbClient
+2. Add a simple database implementation PickleDbClient
 3. Supports ForeignKeyField
 4. Add Model.replace() and Model.get_or_create() method
-5. [MongoDB] Auto create index when field with attr index=True or unique=True
-6. Fix DoesNotExist not found error
+5. Add Field.startswith() query
+6. [MongoDB/Redis] Auto create index when field with attr index=True or unique=True
+7. Fix DoesNotExist not found error
+
 
 * v0.1.0
 Initial version

@@ -13,6 +13,8 @@ def SaveDbJson():
     #with open(jsonDbName, 'w', encoding='utf-8') as f:
     #    f.write(json.dumps(dbJson, indent=2, default=str))
 
+class google:
+    pass
 
 class DatastoreDatabase:
     def __init__(self, project):
@@ -152,16 +154,17 @@ class DBQuery:
                             data[k] = None
                 results.append((Key.from_legacy_urlsafe(key), data))
 
+        order = []
+        reverse = False
         if self.order:
-            order = self.order[0]
-            reverse = False
-            if order.startswith('-'):
-                order = order[1:]
-                reverse = True
-            if order == 'id':
+            for o in self.order: #All fields have to be some in reverse attribute
+                if o.startswith('-'):
+                    reverse = True
+                order.append(o.lstrip('-'))
+            if order[0] == 'id':
                 results.sort(key=lambda x: x[0].identifier, reverse=reverse)
             else:
-                results.sort(key=lambda x: x[1].get(order), reverse=reverse)
+                results.sort(key=lambda x: x[1].get(*order), reverse=reverse)
 
         return QueryResult(results[:limit] if limit else results)
 

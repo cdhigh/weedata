@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-#an ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
+#An ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
-
+#Pypi package: <https://pypi.org/project/weedata>
 __all__ = [
     'DoesNotExist', 'Field', 'PrimaryKeyField', 'BooleanField', 'IntegerField', 'BigIntegerField',
     'SmallIntegerField', 'BitField', 'TimestampField', 'IPField', 'FloatField', 'DoubleField',
@@ -108,7 +108,7 @@ class ForeignKeyDescriptor(FieldDescriptor):
             return obj
         elif not self.field_inst.null:
             raise DoesNotExist(f'Foreign key {field_name} is null')
-        return foreign_id
+        return None
 
     def __get__(self, instance, instance_type=None):
         if instance:
@@ -137,13 +137,13 @@ class BackRefDescriptor(object):
             return self.foreign_model.select().where(self.field_inst == instance.get_id())
         return self # pragma: no cover
 
-#Used for overloading arithmetic operators
+#Used for overriding arithmetic operators
 def arith_op(op, reverse=False):
     def inner(self, other):
         return UpdateExpr(other, op, self) if reverse else UpdateExpr(self, op, other)
     return inner
 
-#Used for overloading comparison operators
+#Used for overriding comparison operators
 def comp_op(op):
     def inner(self, other):
         return self._generate_filter(op, other)
@@ -156,9 +156,9 @@ class Field(object):
         self.index = index
         self.unique = unique
         self.null = null
-        self.bytes_store = False
+        self.bytes_store = False #for redis
     
-    def __eq__(self, other):
+    def __eq__(self, other):  # pragma: no cover
         return ((other.__class__ == self.__class__) and (other.name == self.name) and 
             (other.model == self.model))
 
@@ -166,7 +166,7 @@ class Field(object):
         return hash((self.model.__name__, self.name))
 
     def check_type(self, value):
-        return True
+        return True # pragma: no cover
 
     def add_to_class(self, klass, name, bytes_store=False):
         self.name = name
@@ -176,23 +176,28 @@ class Field(object):
         setattr(klass, name, FieldDescriptor(self))
 
     def db_value(self, value):
-        return value
+        return value # pragma: no cover
 
     def python_value(self, value):
-        return value
+        return value # pragma: no cover
 
     def between(self, other1, other2):
-        if other1 <= other2:
-            child1 = self._generate_filter(Filter.GT, other1)
-            child2 = self._generate_filter(Filter.LT, other2)
-        else:
-            child1 = self._generate_filter(Filter.LT, other1)
-            child2 = self._generate_filter(Filter.GT, other2)
+        if other1 > other2:
+            other1, other2 = other2, other1
+        child1 = self._generate_filter(Filter.GT, other1)
+        child2 = self._generate_filter(Filter.LT, other2)
+        return Filter(bit_op=Filter.AND, children=[child1, child2])
+
+    #emulating the startswith using a combined query
+    def startswith(self, txt):
+        assert(isinstance(txt, str))
+        child1 = self._generate_filter(Filter.GE, txt)
+        child2 = self._generate_filter(Filter.LE, txt + '~') #'~' if the max ascii (0x7e)
         return Filter(bit_op=Filter.AND, children=[child1, child2])
 
     def _generate_filter(self, op, other):
         if self.enforce_type and not self.check_type(other):
-            raise ValueError("Comparing field {} with '{}' of type {}".format(self.name, other, type(other)))
+            raise ValueError(f"Comparing field '{self.name}' with '{other}' of type {type(other)}")
         return Filter(self.name, op, other)
 
     def asc(self):
@@ -239,7 +244,7 @@ class PrimaryKeyField(Field):
         if self.bytes_store:
             return value.decode('utf-8') if isinstance(value, bytes) else value
         else:
-            return value
+            return value # pragma: no cover
 
 class ForeignKeyField(Field):
     def __init__(self, model, backref=None, on_delete=None, **kwargs):
@@ -260,7 +265,7 @@ class ForeignKeyField(Field):
 
     def db_value(self, value):
         if isinstance(value, self.foreign_model):
-            value = value.get_id()
+            value = value.get_id()  # pragma: no cover
         if self.bytes_store:
             return value.encode('utf-8') if isinstance(value, str) else value
         else:
@@ -334,7 +339,7 @@ class CharField(Field):
             return value
     def python_value(self, value):
         if self.bytes_store:
-            return value.decode('utf-8') if value is not None else None
+            return value.decode('utf-8') if isinstance(value, bytes) else value
         else:
             return value
 
@@ -414,13 +419,13 @@ class UpdateExpr:
         if isinstance(inst, Field):
             inst = f'e.{inst.name}'
         elif isinstance(inst, str):
-            inst = f'"{inst}"'
+            inst = f'"{inst}"'  # pragma: no cover
             
         other = self.other
         if isinstance(other, Field):
             other = f'e.{other.name}'
         elif isinstance(other, str):
-            other = f'"{other}"'
+            other = f'"{other}"'  # pragma: no cover
         
         return f'({inst} {self.op} {other})'
 

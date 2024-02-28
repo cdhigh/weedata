@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-#an ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
+#An ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
+#Pypi package: <https://pypi.org/project/weedata>
 import copy
 from .fields import Field, FieldDescriptor, PrimaryKeyField, ForeignKeyField, DoesNotExist, Filter
 from .queries import (QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder,
     ReplaceQueryBuilder)
 
 class BaseModel(type):
-    inheritable_options = ['client', 'order_by', 'primary_key', 'indexes']
+    inheritable_options = ['client', 'order_by', 'primary_key']
 
     def __new__(cls, name, bases, attrs):
         if not bases:
@@ -51,14 +52,12 @@ class BaseModel(type):
         for name, attr in cls.__dict__.items():
             if isinstance(attr, Field):
                 attr.add_to_class(cls, name, bytes_store)
-                if attr.index or attr.unique:
-                    cls._meta.indexes.append(name)
         
         cls._meta.prepared()
         return cls
 
 class ModelOptions(object):
-    def __init__(self, cls, client=None, order_by=None, primary_key='id', indexes=None, **kwargs):
+    def __init__(self, cls, client=None, order_by=None, primary_key='id', **kwargs):
         self.model_class = cls
         self.name = cls.__name__
         self.fields = {}
@@ -66,8 +65,6 @@ class ModelOptions(object):
         self.client = client #database here is actually a database client
         self.order_by = order_by
         self.primary_key = primary_key
-        self.indexes = indexes or []
-        #self.foreign = {}
         self.backref = {}
         
     def prepared(self):
@@ -78,7 +75,7 @@ class ModelOptions(object):
 class Model(object, metaclass=BaseModel):
     def __init__(self, **kwargs):
         self._key = kwargs.get('_key', None)
-        self._data = dict((f.name, v()) for f, v in self._meta.defaults.items())
+        self._data = {f.name: v() for f, v in self._meta.defaults.items()}
         self._obj_cache = {} # cache of foreign_key objects
         self._dirty = {'__key__': True, '_id': True}
         for name, value in kwargs.items():
@@ -173,8 +170,8 @@ class Model(object, metaclass=BaseModel):
         return self.client.update_one(self)
         
     def delete_instance(self, **kwargs):
-        #on delete cascade
-        for field in filter(lambda field: field.on_delete, self._meta.backref.values()):
+        #foreign keys on delete cascade
+        for field in [f for f in self._meta.backref.values() if f.on_delete]:
             field.model.delete().where(field == self.get_id()).execute()
         self.client.delete_one(self)
 
@@ -222,10 +219,9 @@ class Model(object, metaclass=BaseModel):
     #instead return a success message indicating "all indexes already exist"
     @classmethod
     def create_table(cls, **kwargs):
-        for field in cls._meta.fields.values():
+        for name, field in cls._meta.fields.items():
             if field.index or field.unique:
-                cls._meta.client.create_index(cls, field.name, 
-                    unique=field.unique, background=True)
+                cls._meta.client.create_index(cls, name, unique=field.unique, background=True)
 
     def clear_dirty(self, field_name):
         field_name = field_name if isinstance(field_name, list) else [field_name]
@@ -241,3 +237,11 @@ class Model(object, metaclass=BaseModel):
         setattr(self, self._meta.primary_key, value)
         return self
 
+    #will return True if you change the value of an indexed field
+    #param: other - a model instance will be save to database
+    def index_changed(self, other):
+        assert(other._meta.name == self._meta.name)
+        for name, field in self._meta.fields.items():
+            if (field.index or field.unique) and (getattr(self, name, None) != getattr(other, name, None)):
+                return True
+        return False

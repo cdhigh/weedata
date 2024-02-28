@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
 import datetime
-from weedata import *
 from test_base import *
 
-from bson.objectid import ObjectId 
+try:
+    from bson.objectid import ObjectId
+except:
+    ObjectId = lambda x: x
 
 class User(Model):
     class Meta:
@@ -102,13 +104,17 @@ class TestQueryExecution(ModelTestCase):
         self.assertTrue('cloud' not in contents)
 
         d = datetime.datetime
-        users = list(User.select().where(User.day.between(d(1995,1,1), d(1999,12,31))).execute())
+        users = list(User.select().where(User.day.between(d(1999,12,31), d(1995,1,1))).execute())
         emails = set([u.email for u in users])
         self.assertEqual(emails, set(['user5@e.com', 'user6@e.com']))
 
-        ts = list(Tweet.select().where(Tweet.liked.between(61, 54)).execute())
+        ts = list(Tweet.select().where(Tweet.liked.between(54, 61)).execute())
         contents = set([t.content for t in ts])
         self.assertEqual(contents, set(['algorithm', 'python', 'agile']))
+
+    def test_startswith(self):
+        query = Tweet.select().where(Tweet.content.startswith('de')).order_by(Tweet.content)
+        self.assertEqual([item.content for item in query], ['debugging', 'developer'])
     
     def test_select_and(self):
         user = User.select().where((User.name != 'user1') & (User.name != 'user2')).first()

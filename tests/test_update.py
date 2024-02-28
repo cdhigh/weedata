@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
 import datetime
-from weedata import *
 from test_base import *
 
 class User(Model):
@@ -54,6 +53,7 @@ class TestUpdating(ModelTestCase):
             self.create_tweets(self.ids[idx], tweets[idx])
 
     def create_tweets(self, id_, tweets):
+        Tweet.insert().execute()
         for t in tweets:
             self.t_ids.append(Tweet.insert({'user_id': id_, 'content': t[0], 'liked': t[1], 'disliked': t[2]}).execute())
 
@@ -96,14 +96,20 @@ class TestUpdating(ModelTestCase):
         self.assertEqual(created, False)
         self.assertEqual(user.email, 'user6@e.com')
 
-        user, created = User.get_or_create(name='user7', defaults={'day': datetime.datetime(1940, 11, 9), 'email': 'other@e.com', 'times': 11})
+        user, created = User.get_or_create(name='user7', defaults={'day': datetime.datetime(1940, 11, 9), 'email': '7@e.com', 'times': 11})
         self.assertEqual(created, True)
-        self.assertEqual(user.email, 'other@e.com')
+        self.assertEqual(user.email, '7@e.com')
 
         user = User.get(name='user7')
         self.assertEqual(user.name, 'user7')
-        self.assertEqual(user.email, 'other@e.com')
+        self.assertEqual(user.email, '7@e.com')
         self.assertEqual(user.times, 11)
+
+        user.name = 'user8' #test rebuild index
+        user.save()
+        user = User.get(name='user8')
+        self.assertEqual(user.email, '7@e.com')
+
         user.delete_instance()
 
     def test_replace(self):

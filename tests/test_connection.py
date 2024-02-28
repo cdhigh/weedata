@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
 import datetime
-from weedata import *
 from test_base import *
 
 class User(Model):

@@ -3,116 +3,29 @@
 from contextlib import contextmanager
 from functools import wraps
 import datetime, logging, os, re, unittest
-from unittest import mock
-
+from unittest import mock    
 from weedata import *
 
 logger = logging.getLogger('weedata')
-VERBOSITY = int(os.environ.get('WEEDATA_TEST_VERBOSITY') or 1)
-SLOW_TESTS = bool(os.environ.get('WEEDATA_SLOW_TESTS'))
 
 def new_connection(**kwargs):
-    backEnd = os.getenv('WEEDATA_TEST_BACKEND', 'mongodb')
+    backEnd = os.getenv('WEEDATA_TEST_BACKEND')
     if backEnd == 'mongodb':
         return MongoDbClient("weedata_test", "mongodb://127.0.0.1:27017/")
     elif backEnd == 'redis':
         return RedisDbClient("weedata", "redis://127.0.0.1:6379/")
     elif backEnd == 'pickle':
         return PickleDbClient(':memory:')
-    else:
+    elif backEnd == 'datastore':
         return DatastoreClient(project="kindleear")
+    else:
+        raise ValueError(f'Unsupported backEnd {backEnd}')
 
 database = new_connection()
 
 class TestModel(Model):
     class Meta:
         database = database
-
-class Person(TestModel):
-    first = CharField()
-    last = CharField()
-    dob = DateTimeField(index=True)
-
-class Note(TestModel):
-    author = CharField()
-    content = TextField()
-
-
-class Category(TestModel):
-    parent = CharField()
-    name = CharField(max_length=20, primary_key=True)
-
-
-class Relationship(TestModel):
-    from_person = CharField()
-    to_person = CharField()
-
-
-class Register(TestModel):
-    value = IntegerField()
-
-
-class User(TestModel):
-    username = CharField()
-
-class Account(TestModel):
-    email = CharField()
-    user = CharField()
-
-
-class Tweet(TestModel):
-    user = ForeignKeyField(User, backref='tweets')
-    content = TextField()
-    timestamp = TimestampField()
-
-
-class Favorite(TestModel):
-    user = CharField()
-    tweet = CharField()
-
-
-class Sample(TestModel):
-    counter = IntegerField()
-    value = FloatField(default=1.0)
-
-
-class SampleMeta(TestModel):
-    sample = CharField()
-    value = FloatField(default=0.0)
-
-
-class A(TestModel):
-    a = TextField()
-class B(TestModel):
-    a = CharField()
-    b = TextField()
-class C(TestModel):
-    b = CharField()
-    c = TextField()
-
-
-class Emp(TestModel):
-    first = CharField()
-    last = CharField()
-    empno = CharField(unique=True)
-
-class OCTest(TestModel):
-    a = CharField(unique=True)
-    b = IntegerField(default=0)
-    c = IntegerField(default=0)
-
-
-class UKVP(TestModel):
-    key = TextField()
-    value = IntegerField()
-    extra = IntegerField()
-
-class DfltM(TestModel):
-    name = CharField()
-    dflt1 = IntegerField(default=1)
-    dflt2 = IntegerField(default=lambda: 2)
-    dfltn = IntegerField(null=True)
-
 
 class QueryLogHandler(logging.Handler):
     def __init__(self, *args, **kwargs):
@@ -215,7 +128,7 @@ def skip_unless(expr, reason='n/a'):
 
 def slow_test():
     def decorator(method):
-        return unittest.skipUnless(SLOW_TESTS, 'skipping slow test')(method)
+        return unittest.skipUnless(bool(os.environ.get('WEEDATA_SLOW_TESTS')), 'skipping slow test')(method)
     return decorator
 
 def requires_mongodb(method):

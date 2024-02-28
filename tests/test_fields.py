@@ -2,7 +2,6 @@
 # -*- coding:utf-8 -*-
 import calendar, datetime, time, uuid
 from collections import defaultdict
-from weedata import *
 from test_base import *
 
 class IntModel(TestModel):
@@ -43,11 +42,8 @@ class TestIntegerField(ModelTestCase):
         i1 = IntModel.create(value=1)
         i2 = IntModel.create(value=2, value_null=20)
 
-        vals = [(i.value, i.value_null)
-                for i in IntModel.select().order_by(IntModel.value)]
-        self.assertEqual(vals, [
-            (1, None),
-            (2, 20)])
+        vals = [(i.value, i.value_null) for i in IntModel.select().order_by(IntModel.value.asc())]
+        self.assertEqual(vals, [(1, None), (2, 20)])
 
 class FloatModel(TestModel):
     value = FloatField()
@@ -77,10 +73,15 @@ class TestBooleanField(ModelTestCase):
         BoolModel.create(value=None, name='n')
 
         vals = sorted((b.name, b.value) for b in BoolModel.select())
-        self.assertEqual(vals, [
-            ('f', False),
-            ('n', None),
-            ('t', True)])
+        self.assertEqual(vals, [('f', False), ('n', None), ('t', True)])
+
+class User(TestModel):
+    username = CharField()
+
+class Tweet(TestModel):
+    user = ForeignKeyField(User, backref='tweets')
+    content = TextField()
+    timestamp = TimestampField()
 
 class U2(TestModel):
     username = TextField()
@@ -192,7 +193,7 @@ class U2(TestModel):
 
 
 class T2(TestModel):
-    user = ForeignKeyField(U2, backref='tweets', on_delete=True)
+    user = ForeignKeyField(U2, backref='tweets', on_delete=True, null=True, enforce_type=True)
     content = TextField()
 
 class TestForeignKeyField(ModelTestCase):
@@ -200,7 +201,7 @@ class TestForeignKeyField(ModelTestCase):
 
     def test_set_fk(self):
         huey = User.create(username='huey')
-        zaizee = User.create(username='zaizee')    
+        zaizee = User.create(username='zaizee')
         tweet = Tweet.create(content='meow', user=huey)
         self.assertEqual(tweet.user.username, 'huey')
 
@@ -219,6 +220,12 @@ class TestForeignKeyField(ModelTestCase):
 
         self.assertRaises(AttributeError, lambda: Tweet.user.foo)
 
+        with self.assertRaisesCtx(DoesNotExist):
+            Tweet.create(content='emu')
+
+        with self.assertRaisesCtx(DoesNotExist):
+            Tweet.create(content='emu', user=User(username='huey'))
+        
     def test_disable_backref(self):
         class Person(TestModel):
             pass
@@ -247,6 +254,9 @@ class TestForeignKeyField(ModelTestCase):
         self.assertEqual(T2.select().where(T2.user == users[0]).count(), 0)
         self.assertEqual(T2.select().where(T2.user == users[1]).count(), 0)
         self.assertEqual(T2.select().where(T2.user == users[2]).count(), 3)
+
+        T2.create(content='emu', user=u2)
+        self.assertEqual(T2.get(content='emu').user, None)
 
 
 class EfModel(TestModel):

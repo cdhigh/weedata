@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-#an ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
+#An ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee.
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
+#Pypi package: <https://pypi.org/project/weedata>
 import re
 from collections import defaultdict
 from .fields import Field, PrimaryKeyField, arith_op, UpdateExpr, Filter
@@ -47,11 +48,12 @@ class QueryBuilder:
         self._limit = limit
         return self
 
-    def distinct_on(self, field):
+    def distinct(self, field):
         distinct_field = field.name if isinstance(field, Field) else field
         self._distinct = [distinct_field]
         return self
 
+    #the parameter limit will override the property of query object
     def execute(self, page_size=500, parent_key=None, limit=None):
         return self.client.execute(self, page_size=page_size, parent_key=parent_key, limit=limit)
         
@@ -59,9 +61,7 @@ class QueryBuilder:
         result = None
         try:
             result = next(self.execute(page_size=1, limit=1))
-        except TypeError:
-            pass # pragma: no cover
-        except StopIteration:
+        except (TypeError, StopIteration):
             pass
         return result
 
@@ -117,7 +117,8 @@ class DeleteQueryBuilder(QueryBuilder):
         models = []
         for m in super().execute():
             models.append(m)
-            for field in filter(lambda field: field.on_delete, m._meta.backref.values()):
+            #delete on cascade
+            for field in [f for f in m._meta.backref.values() if f.on_delete]:
                 field.model.delete().where(field == m).execute()
 
         return self.client.delete_many(models)
@@ -133,6 +134,8 @@ class InsertQueryBuilder:
             return self.client.insert_many(self.model_class, self.to_insert)
         elif self.to_insert: #dict
             return self.client.insert_one(self.model_class, self.to_insert)
+        else:
+            return None
 
     def __iter__(self):
         ids = self.execute()
@@ -149,11 +152,12 @@ class ReplaceQueryBuilder:
         fields = model._meta.fields
         data = self.to_replace
         for name in data:
-            if fields[name].unique:
+            field = fields.get(name, None)
+            if field and field.unique: #found the field with property unique
                 dbItem = model.get_or_none(getattr(model, name) == data[name])
                 if dbItem:
-                    for name in data:
-                        setattr(dbItem, name, data[name])
+                    for name, value in data.items():
+                        setattr(dbItem, name, value)
                 else:
                     dbItem = model(**data)
                 dbItem.save()
@@ -173,20 +177,19 @@ class UpdateQueryBuilder(QueryBuilder):
     def execute(self):
         cnt = 0
         for e in super().execute():
-            get_field = e._meta.fields.get
+            fields = e._meta.fields
             for field_name, value in self._update.items():
-                field = get_field(field_name, None)
+                field = fields.get(field_name, None)
                 if field:
                     if isinstance(value, UpdateExpr):
-                        #value = eval(str(value))
-                        value = self.my_safe_eval(str(value), {}, locals())
-                    setattr(e, field_name, field.python_value(field.db_value(value)))
+                        value = self.safe_eval(str(value), {}, locals())
+                    setattr(e, field_name, value)
             self.client.update_one(e)
             cnt += 1
         return cnt
 
     @classmethod
-    def my_safe_eval(cls, txt, gbl_dict, local_dict):
+    def safe_eval(cls, txt, gbl_dict, local_dict):
         code = compile(txt, '<user input>', 'eval')
         reason = None
         banned = ('eval', 'compile', 'exec', 'getattr', 'hasattr', 'setattr', 'delattr',
