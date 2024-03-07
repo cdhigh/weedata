@@ -447,7 +447,7 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 # Changelog  
 <details>
 
-* v0.2.0 (unreleased yet)
+* v0.2.0
 1. Supports Redis
 2. Add a simple database implementation PickleDbClient
 3. Supports ForeignKeyField
