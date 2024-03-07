@@ -213,24 +213,19 @@ class DatastoreClient(NosqlClient):
                 return []
 
             converted = []
-            for operator in query_dict.keys():
-                if operator == Filter.OR:
-                    subqueries = query_dict[operator]
-                    ds_filters = list(chain.from_iterable([to_ds_query(subquery) for subquery in subqueries]))
-                    converted.append(qr.Or(ds_filters))
-                elif operator == Filter.AND:
-                    subqueries = query_dict[operator]
-                    ds_filters = list(chain.from_iterable([to_ds_query(subquery) for subquery in subqueries]))
-                    converted.append(qr.And(ds_filters))
+            for op in query_dict.keys():
+                if op in (Filter.OR, Filter.AND): #recrusive
+                    flts = list(chain.from_iterable([to_ds_query(subquery) for subquery in query_dict[op]]))
+                    converted.append(qr.Or(flts) if op == Filter.OR else qr.And(flts))
+                elif op == Filter.NOR:
+                    raise ValueError('datastore does not support nor query')
                 else:
-                    prop_flts = []
                     for field, condition in query_dict.items():
                         if isinstance(condition, dict):
-                            for op, value in condition.items():
-                                prop_flts.append(qr.PropertyFilter(field, op, value))
+                            for op2, value in condition.items():
+                                converted.append(qr.PropertyFilter(field, op2, value))
                         else:
-                            prop_flts.append(qr.PropertyFilter(field, '=', condition))
-                    converted.extend(prop_flts)
+                            converted.append(qr.PropertyFilter(field, '=', condition))
             return converted
 
         result = to_ds_query(mongo_filters)
@@ -498,7 +493,6 @@ class RedisDbClient(NosqlClient):
         
     def execute(self, queryObj, page_size=500, parent_key=None, limit=None):
         klass = queryObj.model_class
-        #if get by key
         _filters = queryObj._filters
         if len(_filters) == 1:
             flt = _filters[0]
@@ -514,21 +508,15 @@ class RedisDbClient(NosqlClient):
         results = []
         key_sep = self.key_sep.encode('utf-8')
         id_name = self.db_id_name().encode('utf-8')
-        limit = limit if limit else queryObj._limit
-        order = []
-        reverse = False
-        for o in queryObj._order: #All fields have to be some in reverse attribute
-            if o.startswith('-'):
-                reverse = True
-            order.append(o.lstrip('-'))
+        limit = limit or queryObj._limit
+        order = [o.lstrip('-') for o in queryObj._order]
+        #All fields have to be some in reverse attribute
+        reverse = any(o.startswith('-') for o in queryObj._order)
         
         cnt = 0
         for key, data in self.iter_data(klass, type_='key_data'):
             data[id_name] = key.rsplit(key_sep, 1)[-1] #set primary key
-            for flt in filters:
-                if not self._matches_query(data, flt, fields):
-                    break
-            else:
+            if all(self._matches_query(data, flt, fields) for flt in filters):
                 results.append(data)
                 cnt += 1
                 if not order and limit and cnt >= limit:
@@ -538,8 +526,7 @@ class RedisDbClient(NosqlClient):
         if order:
             results.sort(key=attrgetter(*order), reverse=reverse)
 
-        for ret in (results[:limit] if limit else results):
-            yield ret
+        yield from (results[:limit] if limit else results)
 
     def isFilterByIndex(self, model, flt):
         return (not flt.bit_op and flt.op == Filter.EQ and flt.item in self.indexes.get(model._meta.name, []))
@@ -590,20 +577,11 @@ class RedisDbClient(NosqlClient):
                 ((op == Filter.IN) and (dbValue in value)) or
                 ((op == Filter.NIN) and (dbValue not in value)))
         elif flt.bit_op == Filter.AND:
-            for c in flt.children:
-                if not self._matches_query(data, c, fields):
-                    return False
-            return True
+            return all(self._matches_query(data, c, fields) for c in flt.children)
         elif flt.bit_op == Filter.OR:
-            for c in flt.children:
-                if self._matches_query(data, c, fields):
-                    return True
-            return False
+            return any(self._matches_query(data, c, fields) for c in flt.children)
         elif flt.bit_op == Filter.NOR:
-            for c in flt.children:
-                if self._matches_query(data, c, fields):
-                    return False
-            return True
+            return not any(self._matches_query(data, c, fields) for c in flt.children)
         else:
             raise ValueError(f"Unsupported bit operator: {flt.bit_op}") # pragma: no cover
         
@@ -780,7 +758,7 @@ class PickleDbClient(RedisDbClient):
         index = '' if type_ == 'index' else None
         key_only = bool(type_ != 'key_data')
         pattern = self.build_key(klass, id_=id_, index=index)
-        for key in [x for x in self.pickleDb.keys() if x.startswith(pattern)]:
+        for key in [x for x in self.pickleDb if x.startswith(pattern)]:
             yield key if key_only else (key, self.pickleDb[key])
 
     def get_by_id(self, klass, id_):
@@ -797,12 +775,12 @@ class PickleDbClient(RedisDbClient):
 
     def drop_table(self, model):
         pattern = self.build_key(model, id_='')
-        for key in [x for x in self.pickleDb.keys() if x.startswith(pattern)]:
+        for key in [x for x in self.pickleDb if x.startswith(pattern)]:
             del self.pickleDb[key]
         self.save_db()
 
 class fakeTransation:
-    def __enter__(self, *args, **kwargs):
+    def __enter__(self):
         return self
-    def __exit__(self, *args, **kwargs):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         pass

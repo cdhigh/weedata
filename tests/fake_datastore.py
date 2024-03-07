@@ -19,9 +19,9 @@ class google:
 class DatastoreDatabase:
     def __init__(self, project):
         self.project = project
-    def __enter__(self, *args, **kwargs):
+    def __enter__(self):
         return self
-    def __exit__(self, *args, **kwargs):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
 class datastore:
@@ -81,9 +81,9 @@ class datastore:
 
         def transaction(self, **args):
             class Transaction:
-                def __enter__(self, *args, **kwargs):
+                def __enter__(self):
                     return self
-                def __exit__(self, *args, **kwargs):
+                def __exit__(self, exc_type, exc_val, exc_tb):
                     pass
             return Transaction()
             
@@ -189,15 +189,9 @@ class DBQuery:
         elif isinstance(flt, qr.CompositeFilter):
             filters = flt.filters
             if flt.op == qr.CompositeFilter.AND:
-                for flt1 in filters:
-                    if not self._entity_matches_query(key, entity, flt1):
-                        return False
-                return True
+                return all(self._entity_matches_query(key, entity, c) for c in filters)
             elif flt.op == qr.CompositeFilter.OR:
-                for flt1 in filters:
-                    if self._entity_matches_query(key, entity, flt1):
-                        return True
-                return False
+                return any(self._entity_matches_query(key, entity, c) for c in filters)
             else:
                 raise ValueError(f"Unsupported composite operator: {query.operator}")
         
@@ -216,9 +210,9 @@ class AggreQueryResult:
             return self
         else:
             raise StopIteration
-    def __enter__(self, *args, **kwargs):
+    def __enter__(self):
         return self
-    def __exit__(self, *args, **kwargs):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
 class AggreQuery:

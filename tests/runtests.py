@@ -63,7 +63,7 @@ class DatastoreMocker:
         if self.backEnd == 'datastore':
             self.mock('mock')
         return self
-    def __exit__(self, *args):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         if self.backEnd == 'datastore':
             self.mock('unmock')
 
