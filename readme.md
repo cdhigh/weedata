@@ -23,20 +23,20 @@ The majority of the content in this document is directly taken from the [officia
 Only Two Steps Needed:
 
 1. Change 
-```
+```python
 from peewee import *
 ```
 to
-```
+```python
 from weedata import *
 ```
 
 2. Change
-```
+```python
 db = SqliteDatabase(dbName)
 ```
 to one of the following lines:
-```
+```python
 db = DatastoreClient(project="AppId")
 db = MongoDbClient(dbName, "mongodb://localhost:27017/")
 db = RedisDbClient("AppId", "redis://127.0.0.1:6379/")
@@ -45,7 +45,6 @@ db = RedisDbClient("AppId", "redis://127.0.0.1:6379/")
 
 
 ## Installation
-<details>
 
 weedata supports Google Cloud Datastore, MongoDB and Redis.    
 To use Google Cloud Datastore, you need to install google-cloud-datastore [optional, only install if need].   
@@ -53,7 +52,7 @@ To use MongoDB, you need to install pymongo [optional, only install if need].
 
 To use redis, you need to install Redis-py [optional, only install if need].   
 
-```
+```bash
 pip install google-cloud-datastore
 pip install pymongo
 pip install redis
@@ -63,21 +62,21 @@ pip install weedata
 
 ### DatastoreClient
 To use Google Cloud Datastore, firstly you need to create a project, set up authentication. You can refer to [Firestore in Datastore mode documentation](https://cloud.google.com/datastore/docs) or [backDatastore mode client libraries](https://cloud.google.com/datastore/docs/reference/libraries) or [Python Client for Google Cloud Datastore API](https://cloud.google.com/python/docs/reference/datastore/latest) for guidance.
-```
+```python
 API signature: DatastoreClient(project=None, namespace=None, credentials=None, \_http=None)
 ```
 
 ### MongoDbClient
 weedata uses pymongo as the MongoDB driver. After correctly installing the MongoDB service and pymongo, create a client following this API signature.
 The parameter 'project' corresponds to the MongoDB database name, and 'host' can be passed as complete database url.
-```
+```python
 MongoDbClient(project, dbUrl='mongodb://127.0.0.1:27017/')
 ```
 
 ### RedisDbClient
 weedata uses redis-py as the redis driver. After correctly installing the redis service and redis-py, create a client following this API signature.  
 The parameter 'project' corresponds to the redis key prefix, and 'host' can be passed as complete database url, you can also choose which db to be used by passing the parameter 'db', the range is [0-15].
-```
+```python
 RedisDbClient(project, dbUrl='redis://127.0.0.1:6379/0', key_sep=':')
 ```
 
@@ -87,24 +86,25 @@ For example, you can add two lines in redis.conf:
 ```
 appendonly yes
 appendfsync always
+or
+appendonly yes
+appendfsync everysec
 ```
 
 
 ### PickleDbClient
 weedata also provides a simple database implementation PickleDbClient using Python's pickle library, which can be used for testing purposes and in applications with limited resources and low data integrity requirements.   
 The parameter "dbName" is the filename of pickle file, if set to ":memory:", an in-memory database is created.  
-```
+```python
 PickleDbClient(dbName, bakBeforeWrite=True)
 ```
 
-</details>
 
 
 
 ## Model Definition
-<details>
 
-```
+```python
 from weedata import *
 
 db = DatastoreClient(project="AppId")
@@ -121,7 +121,7 @@ class Person(Model):
 
 The best practice is to define a base class that connects to the database, and then have other models within your application inherit from it.
 
-```
+```python
 class MyBaseModel(Model):
     class Meta:
         database = db
@@ -136,7 +136,7 @@ class Message(MyBaseModel):
 ```
 
 Or you can setup or change database connection dynamically by using bind method.
-```
+```python
 Person.bind(db)
 Message.bind(db)
 
@@ -144,15 +144,13 @@ Message.bind(db)
 db.bind([Person, Message])
 ```
 
-</details>
 
 
 ## Storing data
-<details>
 
 Let's begin by populating the database with some people. We will use the save() and create() methods to add and update people's records.
 
-```
+```python
 from datetime import datetime
 uncle_bob = Person(name='Bob', birthday=datetime(1960, 1, 15))
 uncle_bob.save()
@@ -160,36 +158,32 @@ uncle_bob.save()
 
 You can also add a person by calling the create() method, which returns a model instance. The insert_many() function is a convenient method for adding many data at once:
 
-```
+```python
 grandma = Person.create(name='grandma', birthday=datetime(1935, 3, 1))
 Person.insert_many([{'name':'Herb', 'birthday':datetime(1950, 5, 5)}, {'name':'Adam', 'birthday':datetime(1990, 9, 1)}])
 ```
-</details>
 
 
 
 ## Counting records
-<details>
 
 You can count the number of rows in any select query:
 
-```
+```python
 Tweet.select().count()
 Tweet.select().where(Tweet.id > 50).count()
 ```
 
-</details>
 
 
 
 ## Updating data
-<details>
 
 To update data, modify the model instance and call save() to persist the changes.   
 Here we will change Grandma's name and then save the changes in the database.    
 Or you can use an update statement that supports all standard arithmetic operators:  
 
-```
+```python
 grandma.name = 'Grandma'
 grandma.save()
 
@@ -201,28 +195,26 @@ Person.update({Person.name: 'Dear. ' + Person.name}).where(Person.birthday > dat
 
 To delete one or many instances from database:
 
-```
+```python
 herb.delete_instance()
 Person.delete().where(Person.birthday < datetime(1950, 5, 4)).execute()
 ```
 
 To remove the whole collection(MongoDb)/kind(datastore), you can use:
 
-```
+```python
 Person.drop_table()
 db.drop_tables([Person, Message])
 ```
-</details>
 
 
 ## Retrieving Data
-<details>
 
 
 ### Getting single records
 Let's retrieve Grandma's record from the database. To get a single record from the database, use Select.get():
 
-```
+```python
 grandma = Person.get(name = 'Grandma')
 grandma = Person.get(Person.name == 'Grandma')
 grandma = Person.select().where(Person.name != 'Grandma').get()
@@ -232,13 +224,13 @@ grandma = Person.get_by_id('65bda09d6efd9b1130ffccb0')
 grandma = Person.select().where(Person.id == '65bda09d6efd9b1130ffccb0').first()
 ```
 
-```
+```python
 grandma = Person.select(Person.name, Person.birthday).where(Person.name == 'Grandma').first()
 ```
 
 The code lines above return an instance of the Model. If, in some situations, you need a dictionary, you can use dicts() to return a standard Python dictionary.
 
-```
+```python
 grandma.dicts()
 grandma.dicts(only=[Person.name, Person.birthday])
 grandma.dicts(exclude=[Person.birthday])
@@ -250,7 +242,7 @@ grandma.dicts(remove_id=True)
 ### Lists of records
 Let's list all the people in the database:
 
-```
+```python
 for person in Person.select():
     print(person.name)
 ```
@@ -260,7 +252,7 @@ for person in Person.select():
 ### Sorting
 Let's make sure these are sorted alphabetically by adding an order_by() clause:
 
-```
+```python
 for person in Person.select().where(Person.birthday <= datetime(1960, 1, 15)).order_by(Person.name):
     print(person.name)
 
@@ -274,7 +266,7 @@ for person in Person.select().order_by(Person.birthday.desc()):
 
 People whose birthday is between 1940 and 1960 (inclusive of both years):
 
-```
+```python
 d1940 = datetime(1940, 1, 1)
 d1960 = datetime(1960, 12, 31)
 query = Person.select().where((Person.birthday >= d1940) & (Person.birthday <= d1960))
@@ -287,11 +279,9 @@ query = Person.select().where(Person.birthday >= d1940).where(Person.birthday <=
 query = Person.select().where((Person.birthday < d1940) | (Person.birthday > d1960))
 query = Person.select().where(~((Person.birthday < d1940) | (Person.birthday > d1960)))
 ```
-</details>
 
 
 # Models and Fields
-<details>
 
 ## Field types supported:
 * BooleanField
@@ -321,7 +311,7 @@ The following names of fields reserved by the model, should be avoided for your 
 ## Field initialization arguments
 Parameters accepted by all field types and their default values:
 * `unique = False` – create a unique index on this column.
-* `index = False` – create an index on this column
+* `index = None` – create an index on this column. If you want to store content longer than 1500 bytes in the datastore, set the index to False.   
 * `default = None` – any value or callable to use as a default for uninitialized models
 * `enforce_type = False` – determine if the new value is of a specific type.
 
@@ -332,7 +322,7 @@ Other parameters accepted by Peewee can be passed, weedata simply ignores them i
 ## Default field values
 weedata can provide default values for fields when objects are created. For example to have an IntegerField default to zero rather than None, you could declare the field with a default value:
 
-```
+```python
 class Message(Model):
     context = TextField()
     read_count = IntegerField(default=0)
@@ -340,7 +330,7 @@ class Message(Model):
 
 In some instances it may make sense for the default value to be dynamic. A common scenario is using the current date and time. weedata allows you to specify a function in these cases, whose return value will be used when the object is created. Note we only provide the function, we do not actually call it:
 
-```
+```python
 class Message(Model):
     context = TextField()
     timestamp = DateTimeField(default=datetime.datetime.now)
@@ -350,7 +340,7 @@ class Message(Model):
 ## Model options and table metadata
 In order not to pollute the model namespace, model-specific configuration is placed in a special class called Meta (a convention borrowed from the django framework):
 
-```
+```python
 db = MongoDbClient("AppId", "mongodb://localhost:27017/")
 
 class Person(Model):
@@ -364,7 +354,7 @@ class Person(Model):
 Once the class is defined, you should not access ModelClass.Meta, but instead use ModelClass.\_meta.  
 The ModelOptions class implements several methods which may be of use for retrieving model metadata.  
 
-```
+```python
 Person._meta.fields
 Person._meta.client
 ```
@@ -373,20 +363,18 @@ Now, the ModelOptions accepts two parameters:
 * **primary_key**: Optional, the name of the primary key at the underlying level of each database is different. It's called "key" in Datastore, for MongoDB, it's "\_id", to ensure compatibility with SQL and simplify application code, weedata automatically adds a primary key named 'id' with a string type. This primary key is only an application-level attribute variable and will not be saved to the underlying database.
 If this name conflicts with your application, you can use the "primary_key" attribute to modify it, for example:
 
-```
+```python
 class Meta
     database = db
     primary_key = 'id_'
 ```
 
-</details>
 
 # Querying
-<details>
 
 ## Selecting a single record
 
-```
+```python
 User.get_by_id('65bda09d6efd9b1130ffccb0')
 User.get(User.username == 'Charlie')
 User.get(username='Charlie')
@@ -422,7 +410,7 @@ The following types of comparisons are supported by weedata:
 
 ## Some extra examples
 
-```
+```python
 user = User.select().where(User.name == 'python').get()
 user = User.select().where(User.name == 'python').first()
 user = User.select().where(User.name.in_(['python', 'cobra'])).first()
@@ -441,11 +429,14 @@ User.update({User.score: User.att_days + (User.evaluation * 2)}).where(User.age 
 User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).execute()
 
 ```
-</details>
 
 
 # Changelog  
-<details>
+
+* v0.2.1
+1. Set index=False will exclude the field from indexes in datastore
+2. Bugfix: datastore update query removes the fields unmodified
+
 
 * v0.2.0
 1. Supports Redis
@@ -460,4 +451,3 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 * v0.1.0
 Initial version
 
-</details>

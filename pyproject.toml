@@ -1,6 +1,6 @@
 [project]
 name = "weedata"
-version = "0.2.0"
+version = "0.2.1"
 description = "an ORM/ODM for Google Cloud Datastore/MongoDB/redis, featuring a compatible interface with Peewee."
 readme = "README.md"
 license = { file = "LICENSE" }

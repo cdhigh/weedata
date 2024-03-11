@@ -86,7 +86,7 @@ class DatastoreClient(NosqlClient):
     def insert_one(self, klass, data: dict):
         model = klass(**data)
         data = model.dicts(remove_id=True, db_value=True)
-        entity = self.create_entity(data, kind=klass._meta.name)
+        entity = self.create_entity(data, model)
         self.client.put(entity)
         return entity.key.to_legacy_urlsafe().decode()
 
@@ -98,14 +98,14 @@ class DatastoreClient(NosqlClient):
             for data in batch:
                 model = klass(**data)
                 data = model.dicts(remove_id=True, db_value=True)
-                entities.append(self.create_entity(data, kind=kind))
+                entities.append(self.create_entity(data, model))
             self.client.put_multi(entities)
             ids.extend([e.key.to_legacy_urlsafe().decode() for e in entities])
         return ids
 
     def update_one(self, model):
-        data = model.dicts(remove_id=True, db_value=True, only_dirty=bool(model._key))
-        entity = self.create_entity(data, kind=model._meta.name, key=model._key)
+        data = model.dicts(remove_id=True, db_value=True, only_dirty=False) #datastore update all fields always
+        entity = self.create_entity(data, model, key=model._key)
         if data:
             self.client.put(entity)
             model.clear_dirty(list(data.keys()))
@@ -241,10 +241,10 @@ class DatastoreClient(NosqlClient):
         return [entities[i:i + batch_size] for i in range(0, len(entities), batch_size)]
 
     #create datastore entity instance
-    def create_entity(self, data: dict, kind=None, key=None, parent_key=None):
+    def create_entity(self, data: dict, model, key=None, parent_key=None):
         if not key:
-            key = self.generate_key(kind, parent_key=parent_key)
-        entity = datastore.Entity(key=key)
+            key = self.generate_key(model._meta.name, parent_key=parent_key)
+        entity = datastore.Entity(key=key, exclude_from_indexes=model._meta.exclude_from_indexes)
         entity.update(data)
         return entity
 
@@ -274,7 +274,8 @@ class DatastoreClient(NosqlClient):
         #compatible for class and instance
         kind = model._meta.name if isinstance(model, (BaseModel, Model)) else model
         query = self.client.query(kind=kind, ancestor=parent_key)
-        query.projection = ['__key__']
+        #query.projection = ['__key__']
+        query.keys_only()
         keys = []
         cursor = None
         while True:

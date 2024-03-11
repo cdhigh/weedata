@@ -32,9 +32,9 @@ class datastore:
         return Client()
 
     @classmethod
-    def Entity(cls, key):
+    def Entity(cls, key, exclude_from_indexes=None):
         class _Entity:
-            def __init__(self, key):
+            def __init__(self, key, exclude_from_indexes=None):
                 self.key = key
                 self.data = None
             def update(self, data):
@@ -43,7 +43,7 @@ class datastore:
                 return f'key={str(self.key)}, data={self.data}'
         
         if key not in cls.entities:
-            cls.entities[key] = _Entity(key)
+            cls.entities[key] = _Entity(key, exclude_from_indexes)
         return cls.entities[key]
 
     class Client:
@@ -197,6 +197,9 @@ class DBQuery:
         
         else:
             raise ValueError(f"Unsupported query type: {type(query)}")
+
+    def keys_only(self):
+        self.projection = ['__key__']
 
 class AggreQueryResult:
     def __init__(self, value):

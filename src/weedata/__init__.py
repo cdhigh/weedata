@@ -4,7 +4,7 @@
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 
-__version__ = '0.1.0'
+__version__ = '0.2.1'
 
 from .client import DatastoreClient, MongoDbClient, RedisDbClient, PickleDbClient
 from .model import Model

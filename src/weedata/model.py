@@ -66,11 +66,14 @@ class ModelOptions(object):
         self.order_by = order_by
         self.primary_key = primary_key
         self.backref = {}
+        self.exclude_from_indexes = [] #for datastore only
         
     def prepared(self):
         for field in self.fields.values():
             if field.default is not None:
                 self.defaults[field] = field.default
+            if field.index == False: #will be indexed when is None/True in datastore
+                self.exclude_from_indexes.append(field.name)
 
 class Model(object, metaclass=BaseModel):
     def __init__(self, **kwargs):

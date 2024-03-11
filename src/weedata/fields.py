@@ -150,7 +150,7 @@ def comp_op(op):
     return inner
 
 class Field(object):
-    def __init__(self, default=None, enforce_type=False, index=False, unique=False, null=False, **kwargs):
+    def __init__(self, default=None, enforce_type=False, index=None, unique=False, null=False, **kwargs):
         self.default = default if callable(default) else lambda: default
         self.enforce_type = enforce_type
         self.index = index
@@ -360,12 +360,21 @@ class DateTimeField(Field):
         return isinstance(value, datetime.datetime)
     def db_value(self, value):
         if self.bytes_store:
-            return value.isoformat().encode('utf-8') if value is not None else b''
+            if not value:
+                return b''
+            elif isinstance(value, datetime.datetime):
+                return value.isoformat().encode('utf-8')
+            else:
+                return value
         else:
             return value
     def python_value(self, value):
         if self.bytes_store:
-            return datetime.datetime.fromisoformat(value.decode('utf-8')) if value else None
+            if not value:
+                return None
+            else:
+                value = value.decode('utf-8') if isinstance(value, bytes)  else value
+                return datetime.datetime.fromisoformat(value)
         else:
             return value
 
