@@ -294,7 +294,7 @@ class MongoDbClient(NosqlClient):
     def __init__(self, project, dbUrl='mongodb://127.0.0.1:27017/'):
         self.project = project
         self.dbUrl = dbUrl
-        self.client = pymongo.MongoClient(self.dbUrl)
+        self.client = pymongo.MongoClient(self.dbUrl, connect=False)
         self._db = self.client[project]
     
     @classmethod

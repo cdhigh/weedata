@@ -343,11 +343,19 @@ class CharField(Field):
         else:
             return value
 
-TextField = CharField
 FixedCharField = CharField
 UUIDField = CharField
 
+class TextField(CharField):
+    def __init__(self, **kwargs):
+        kwargs.setdefault('index', False)
+        super().__init__(*kwargs)
+
 class BlobField(Field):
+    def __init__(self, **kwargs):
+        kwargs.setdefault('index', False)
+        super().__init__(*kwargs)
+        
     def check_type(self, value):
         return isinstance(value, bytes)
     def db_value(self, value):
@@ -379,6 +387,10 @@ class DateTimeField(Field):
             return value
 
 class JSONField(Field):
+    def __init__(self, **kwargs):
+        kwargs.setdefault('index', False)
+        super().__init__(*kwargs)
+
     def check_type(self, value):
         json_types = [type(None), bool, int, float, str, list, dict, tuple]
         return any(isinstance(value, json_type) for json_type in json_types)
