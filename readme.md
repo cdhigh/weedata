@@ -433,6 +433,11 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 # Changelog  
 
+* v0.2.2
+1. Delays connecting to the pymongo database until the first operation.   
+2. The default Index property of TextField/BlobField/JSONField is set to False.   
+
+
 * v0.2.1
 1. Set index=False will exclude the field from indexes in datastore
 2. Bugfix: datastore update query removes the fields unmodified
