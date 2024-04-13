@@ -433,6 +433,10 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 # Changelog  
 
+* v0.2.3
+1. bugfix: TextField/BlobField/JSONField initial params not worked.   
+
+
 * v0.2.2
 1. Delays connecting to the pymongo database until the first operation.   
 2. The default Index property of TextField/BlobField/JSONField is set to False.   
