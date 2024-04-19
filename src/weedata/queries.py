@@ -56,7 +56,10 @@ class QueryBuilder:
     #the parameter limit will override the property of query object
     def execute(self, page_size=500, parent_key=None, limit=None):
         return self.client.execute(self, page_size=page_size, parent_key=parent_key, limit=limit)
-        
+    
+    def dicts(self):
+        return self.client.execute(self, page_size=page_size, parent_key=parent_key, as_dict=True)
+
     def get(self):
         result = None
         try:

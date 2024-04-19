@@ -5,7 +5,8 @@
 #Repository: <https://github.com/cdhigh/weedata>
 #Pypi package: <https://pypi.org/project/weedata>
 import copy
-from .fields import Field, FieldDescriptor, PrimaryKeyField, ForeignKeyField, DoesNotExist, Filter
+from .fields import (Field, FieldDescriptor, PrimaryKeyField, ForeignKeyField, DoesNotExist, 
+        Filter, JSONField)
 from .queries import (QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder,
     ReplaceQueryBuilder)
 
@@ -188,16 +189,18 @@ class Model(object, metaclass=BaseModel):
     #: remove_id - remove key and id field from dict
     #: db_value - if prepared for saving to db
     #: only_dirty - export items unsaved only
-    def dicts(self, **kwargs):
-        only = [x.name for x in kwargs.get('only', [])]
-        exclude = [x.name for x in kwargs.get('exclude', [])]
+    def dicts(self, only=None, exclude=None, remove_id=False, db_value=False, only_dirty=False):
+        only = [(x if isinstance(x, str) else x.name) for x in (only or [])]
+        exclude = [(x if isinstance(x, str) else x.name) for x in (exclude or [])]
         should_skip = lambda n: (n in exclude) or (only and (n not in only))
-        db_value = kwargs.get('db_value', False)
-        only_dirty = kwargs.get('only_dirty', False)
-
+        
         data = {}
         for name, field in self._meta.fields.items():
-            if not should_skip(name) and (not only_dirty or self._dirty.get(name, False)):
+            if should_skip(name):
+                continue
+            
+            # JSONField is mutable and sometimes its changes cannot be determined
+            if not only_dirty or (self._dirty.get(name) or isinstance(field, JSONField)):
                 value = getattr(self, name, None)
                 if value and isinstance(field, ForeignKeyField) and isinstance(value, Model):
                     value = value.get_id()
@@ -205,10 +208,11 @@ class Model(object, metaclass=BaseModel):
                     value = field.db_value(value)
                 data[name] = value
 
-        if kwargs.get('remove_id'):
+        if remove_id:
             data.pop('_key', None)
             data.pop('id', None)
             data.pop('_id', None)
+        self.client.log.debug(self._meta.name + '.dicts: \n' + str(data))
         return data
 
     @classmethod

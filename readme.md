@@ -433,6 +433,10 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 # Changelog  
 
+* v0.2.4
+1. Optimize the modification logic for JSONField, saving to the database at any time.    
+
+
 * v0.2.3
 1. bugfix: TextField/BlobField/JSONField initial params not worked.   
 

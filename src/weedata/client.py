@@ -4,7 +4,7 @@
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 #Pypi package: <https://pypi.org/project/weedata>
-import os, sys, uuid, pickle, shutil
+import os, sys, uuid, pickle, shutil, logging
 from itertools import chain
 from operator import attrgetter
 from collections import defaultdict
@@ -14,18 +14,18 @@ try:
     from google.cloud import datastore
     from google.cloud.datastore import Key
     from google.cloud.datastore import query as qr
-except ImportError:  # pragma: no cover
+except:  # pragma: no cover
     datastore = None
 
 try:
     import pymongo
     from bson.objectid import ObjectId
-except ImportError:  # pragma: no cover
+except:  # pragma: no cover
     pymongo = None
 
 try:
     import redis
-except ImportError:  # pragma: no cover
+except:  # pragma: no cover
     redis = None
 
 from .model import Model, BaseModel
@@ -37,6 +37,8 @@ from .fields import Filter
 
 class NosqlClient(object):
     bytes_store = False #For redis, it's True
+    def __init__(self, *args, **kwargs):
+        self.log = logging.getLogger('weedata')
 
     def bind(self, models):
         for model in models:
@@ -67,6 +69,7 @@ class NosqlClient(object):
     
 class DatastoreClient(NosqlClient):
     def __init__(self, project=None, namespace=None, credentials=None, _http=None):
+        super().__init__()
         self.project = project or os.getenv("GOOGLE_CLOUD_PROJECT", None)
         self.credentials = credentials
         self.namespace = namespace
@@ -126,7 +129,7 @@ class DatastoreClient(NosqlClient):
         else:
             return 0
 
-    def execute(self, queryObj, page_size=500, parent_key=None, limit=None):
+    def execute(self, queryObj, page_size=500, parent_key=None, limit=None, as_dict=False):
         klass = queryObj.model_class
         kind = klass._meta.name
         query = self.client.query(kind=kind, ancestor=parent_key)
@@ -134,7 +137,7 @@ class DatastoreClient(NosqlClient):
 
         limit = limit if limit else queryObj._limit
         batch_size = min(page_size, limit) if limit else page_size
-        yield from self.query_fetch(query, batch_size, limit, klass)
+        yield from self.query_fetch(query, batch_size, limit, klass, as_dict)
 
     #count aggregation query
     def count(self, queryObj, parent_key=None):
@@ -163,7 +166,7 @@ class DatastoreClient(NosqlClient):
             return next(result).value if result else 0
 
     #generate model instance(klass!=None) or entity(klass=None)
-    def query_fetch(self, query, batch_size=500, limit=0, klass=None):
+    def query_fetch(self, query, batch_size=500, limit=0, klass=None, as_dict=False):
         cursor = None
         count = 0
         while True:
@@ -172,7 +175,7 @@ class DatastoreClient(NosqlClient):
 
             for entity in result:
                 last_entity = self.make_instance(klass, entity) if klass else entity
-                yield last_entity
+                yield last_entity.dicts() if (last_entity and as_dict) else last_entity
                 count += 1
             cursor = result.next_page_token
             if not cursor or (last_entity is None) or (limit and (count >= limit)):
@@ -292,6 +295,7 @@ class DatastoreClient(NosqlClient):
 
 class MongoDbClient(NosqlClient):
     def __init__(self, project, dbUrl='mongodb://127.0.0.1:27017/'):
+        super().__init__()
         self.project = project
         self.dbUrl = dbUrl
         self.client = pymongo.MongoClient(self.dbUrl, connect=False)
@@ -334,7 +338,7 @@ class MongoDbClient(NosqlClient):
     def delete_many(self, models):
         return sum([self.delete_one(model) for model in models])
         
-    def execute(self, queryObj, page_size=500, parent_key=None, limit=None):
+    def execute(self, queryObj, page_size=500, parent_key=None, limit=None, as_dict=False):
         klass = queryObj.model_class
         collection = self._db[klass._meta.name]
         sort = [(item[1:], pymongo.DESCENDING) if item.startswith('-') else (item, pymongo.ASCENDING) for item in queryObj._order]
@@ -350,7 +354,8 @@ class MongoDbClient(NosqlClient):
                 if limit:
                     cursor = cursor.limit(limit)
                 for item in cursor:
-                    yield self.make_instance(klass, item)
+                    inst = self.make_instance(klass, item)
+                    yield inst.dicts() if (inst and as_dict) else inst
 
     def count(self, queryObj, parent_key=None):
         return self._db[queryObj.model_class._meta.name].count_documents(queryObj.filters())
@@ -405,6 +410,7 @@ class RedisDbClient(NosqlClient):
     urlsafe_alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 
     def __init__(self, project, dbUrl='redis://127.0.0.1:6379/0', key_sep=':'):
+        super().__init__()
         self.redis = redis.from_url(dbUrl)
         self.prefix = f'{project}{key_sep}'
         self.key_sep = key_sep
@@ -492,16 +498,17 @@ class RedisDbClient(NosqlClient):
     def delete_many(self, models):
         return sum([self.delete_one(model) for model in models])
         
-    def execute(self, queryObj, page_size=500, parent_key=None, limit=None):
+    def execute(self, queryObj, page_size=500, parent_key=None, limit=None, as_dict=False):
         klass = queryObj.model_class
         _filters = queryObj._filters
         if len(_filters) == 1:
             flt = _filters[0]
             if flt.isFilterById(self.db_id_name()):
-                yield self.get_by_id(klass, flt.value)
+                inst = self.get_by_id(klass, flt.value)
+                yield inst.dicts() if (inst and as_dict) else inst
                 return
             elif self.indexes.get(klass._meta.name) and self.isFilterByIndex(klass, flt):
-                yield from self.get_by_index(klass, flt)
+                yield from self.get_by_index(klass, flt, as_dict)
                 return
             
         filters = [flt.clone('utf-8') for flt in _filters]
@@ -527,7 +534,8 @@ class RedisDbClient(NosqlClient):
         if order:
             results.sort(key=attrgetter(*order), reverse=reverse)
 
-        yield from (results[:limit] if limit else results)
+        for inst in (results[:limit] if limit else results):
+            yield inst.dicts() if (inst and as_dict) else inst
 
     def isFilterByIndex(self, model, flt):
         return (not flt.bit_op and flt.op == Filter.EQ and flt.item in self.indexes.get(model._meta.name, []))
@@ -554,10 +562,11 @@ class RedisDbClient(NosqlClient):
         else:
             return None
 
-    def get_by_index(self, klass, flt):
+    def get_by_index(self, klass, flt, as_dict=False):
         key = self.build_key(klass, index=(flt.item, flt.value))
         for id_ in self.redis.smembers(key):
-            yield self.get_by_id(klass, id_)
+            inst = self.get_by_id(klass, id_)
+            yield inst.dicts() if (inst and as_dict) else inst
 
     def _matches_query(self, data: dict, flt: Filter, fields: dict):
         if not flt.bit_op:
@@ -656,6 +665,7 @@ class RedisDbClient(NosqlClient):
 class PickleDbClient(RedisDbClient):
     #pickle://dbName?bakBeforeWrite=yes
     def __init__(self, dbName, bakBeforeWrite=True):
+        NosqlClient.__init__(self)
         if '://' in dbName:
             ret = urlparse(dbName)
             dbName = ret.netloc or ret.path
