@@ -152,9 +152,9 @@ class Model(object, metaclass=BaseModel):
                 return cls.create(**kwargs), True
 
     @classmethod
-    def get_or_none(cls, query=None):
+    def get_or_none(cls, *query, **filters):
         try:
-            return cls.get(query)
+            return cls.get(*query, **filters)
         except: # pragma: no cover
             return None
 

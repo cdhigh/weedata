@@ -432,6 +432,9 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 
 # Changelog  
+* v0.2.5
+1. bugfix: The compatibility problem of get_or_none().
+
 
 * v0.2.4
 1. Optimize the modification logic for JSONField, saving to the database at any time.    
