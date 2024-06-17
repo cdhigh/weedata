@@ -57,7 +57,7 @@ class QueryBuilder:
     def execute(self, page_size=500, parent_key=None, limit=None):
         return self.client.execute(self, page_size=page_size, parent_key=parent_key, limit=limit)
     
-    def dicts(self):
+    def dicts(self, page_size=500, parent_key=None, limit=None):
         return self.client.execute(self, page_size=page_size, parent_key=parent_key, as_dict=True)
 
     def get(self):

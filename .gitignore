@@ -1,0 +1,13 @@
+*.pyc
+.DS_Store
+*.db
+*.json
+*.pkl
+src/weedata.egg-info/
+dist/
+petwee.egg-info/
+.idea/
+tests/.covhtml/
+tests/.coverage
+.tags
+.tags_sorted_by_file

@@ -432,6 +432,14 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 
 # Changelog  
+* v0.2.7
+1. bugfix: fix query.dicts function
+
+
+* v0.2.6
+1. bugfix: Compatible with peewee, store datetime without timezone info.
+
+
 * v0.2.5
 1. bugfix: The compatibility problem of get_or_none().
 

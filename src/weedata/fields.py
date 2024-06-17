@@ -363,26 +363,31 @@ class BlobField(Field):
     def python_value(self, value):
         return value
 
+#compatible with peewee, datetime without timezone
 class DateTimeField(Field):
+    default_tmfmt = "%Y-%m-%d %H:%M:%S"
     def check_type(self, value):
         return isinstance(value, datetime.datetime)
     def db_value(self, value):
         if self.bytes_store:
-            if not value:
-                return b''
-            elif isinstance(value, datetime.datetime):
-                return value.isoformat().encode('utf-8')
+            if isinstance(value, datetime.datetime):
+                value = value.strftime(self.default_tmfmt)
             else:
-                return value
+                value = value or ''
+            return value.encode('utf-8')
+        elif isinstance(value, datetime.datetime):
+            return value.replace(tzinfo=None)
         else:
             return value
+
     def python_value(self, value):
+        if isinstance(value, bytes):
+            value = value.decode('utf-8')
+        
         if self.bytes_store:
-            if not value:
-                return None
-            else:
-                value = value.decode('utf-8') if isinstance(value, bytes)  else value
-                return datetime.datetime.fromisoformat(value)
+            return datetime.datetime.strptime(value, self.default_tmfmt).replace(tzinfo=None) if value else None
+        elif isinstance(value, datetime.datetime):
+            return value.replace(tzinfo=None)
         else:
             return value
 
