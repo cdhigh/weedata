@@ -57,10 +57,7 @@ class datastore:
             return Key(name, identifier, parent)
         def put(self, entity):
             key = str(entity.key)
-            if key in dbJson:
-                dbJson[key].update(entity.data)
-            else:
-                dbJson[key] = entity.data
+            dbJson[key] = dict(entity.data) #datastore put replaces the whole entity
             SaveDbJson()
         def put_multi(self, entities):
             for e in entities:
@@ -149,9 +146,8 @@ class DBQuery:
                     break
             else:
                 if self.projection:
-                    for k in data:
-                        if k not in self.projection:
-                            data[k] = None
+                    #build a new dict, never mutate the stored entity data
+                    data = {k: (None if k not in self.projection else v) for k, v in data.items()}
                 results.append((Key.from_legacy_urlsafe(key), data))
 
         order = []
@@ -164,7 +160,14 @@ class DBQuery:
             if order[0] == 'id':
                 results.sort(key=lambda x: x[0].identifier, reverse=reverse)
             else:
-                results.sort(key=lambda x: x[1].get(*order), reverse=reverse)
+                def sort_key(x):
+                    #None sorts after all normal values and must not crash the comparison
+                    vals = []
+                    for o in order:
+                        v = x[1].get(o, None)
+                        vals.append((v is None, v))
+                    return tuple(vals)
+                results.sort(key=sort_key, reverse=reverse)
 
         return QueryResult(results[:limit] if limit else results)
 
@@ -175,15 +178,21 @@ class DBQuery:
             value = flt.value
             op = {'=': '==', 'IN': 'in', 'NOT_IN': 'not in'}.get(op, op)
             if isinstance(value, str):
-                value = f'"{value}"'
+                value = repr(value) #repr() escapes the embedded quotes
             elif isinstance(value, datetime.datetime):
                 d = value.strftime("%Y-%m-%d %H:%M:%S")
                 value = f'datetime.datetime.strptime("{d}", "%Y-%m-%d %H:%M:%S")'
             
             if item == '__key__':
-                expr = f'key {op} "{value}"'
+                if isinstance(value, str):
+                    expr = f'key {op} {value}'
+                else:
+                    expr = f'key {op} "{value}"'
                 return eval(expr)
             else:
+                val = entity.get(item, None)
+                if val is None and op in ('<', '>', '<=', '>='):
+                    return False #None is not comparable, matches no ordering condition
                 expr = f'entity.get("{item}", None) {op} {value}'
                 return eval(expr)            
         elif isinstance(flt, qr.CompositeFilter):
@@ -193,10 +202,10 @@ class DBQuery:
             elif flt.op == qr.CompositeFilter.OR:
                 return any(self._entity_matches_query(key, entity, c) for c in filters)
             else:
-                raise ValueError(f"Unsupported composite operator: {query.operator}")
+                raise ValueError(f"Unsupported composite operator: {flt.op}")
         
         else:
-            raise ValueError(f"Unsupported query type: {type(query)}")
+            raise ValueError(f"Unsupported query type: {type(flt)}")
 
     def keys_only(self):
         self.projection = ['__key__']
@@ -228,9 +237,9 @@ class AggreQuery:
         if self.type_ == 'count':
             value = len(list(results))
         elif self.type_ == 'sum':
-            value = sum([r[1].get(field, 0) for r in results])
+            value = sum([(r[1].get(self.field, None) or 0) for r in results])
         else:
-            data = [r[1].get(field, 0) for r in results]
+            data = [(r[1].get(self.field, None) or 0) for r in results]
             value = sum(data) / len(data) if data else 0
         return AggreQueryResult(value)
 

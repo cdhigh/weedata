@@ -5,8 +5,8 @@
 #Repository: <https://github.com/cdhigh/weedata>
 #Pypi package: <https://pypi.org/project/weedata>
 import copy
-from .fields import (Field, FieldDescriptor, PrimaryKeyField, ForeignKeyField, DoesNotExist, 
-        Filter, JSONField)
+from .fields import (Field, FieldDescriptor, PrimaryKeyField, ForeignKeyField, DoesNotExist,
+        Filter, JSONField, is_model_instance)
 from .queries import (QueryBuilder, DeleteQueryBuilder, InsertQueryBuilder, UpdateQueryBuilder,
     ReplaceQueryBuilder)
 
@@ -14,8 +14,9 @@ class BaseModel(type):
     inheritable_options = ['client', 'order_by', 'primary_key']
 
     def __new__(cls, name, bases, attrs):
-        if not bases:
-            return super(BaseModel, cls).__new__(cls, name, bases, attrs) # pragma: no cover
+        if not any(isinstance(b, BaseModel) for b in bases):
+            #the root Model class itself, it carries no field machinery
+            return super(BaseModel, cls).__new__(cls, name, bases, attrs)
 
         meta_options = {}
         meta = attrs.pop('Meta', None)
@@ -29,7 +30,7 @@ class BaseModel(type):
             base_meta = getattr(b, '_meta', None)
             if not base_meta:
                 continue
-            
+
             for (k, v) in base_meta.__dict__.items():
                 if k in cls.inheritable_options and k not in meta_options:
                     meta_options[k] = v
@@ -40,7 +41,12 @@ class BaseModel(type):
 
         meta_options.setdefault('client', None)
         meta_options.setdefault('primary_key', 'id')
-        attrs[meta_options['primary_key']] = PrimaryKeyField()
+        pk_name = meta_options['primary_key']
+        pk_attr = attrs.get(pk_name, None)
+        if pk_attr is not None and not isinstance(pk_attr, PrimaryKeyField):
+            raise ValueError(f'"{pk_name}" is the reserved primary key name of model "{name}", '
+                f'but it is defined as {type(pk_attr).__name__}')
+        attrs[pk_name] = PrimaryKeyField()
 
         # initialize the new class and set the magic attributes
         cls = super(BaseModel, cls).__new__(cls, name, bases, attrs)
@@ -50,10 +56,10 @@ class BaseModel(type):
 
         # replace the fields with field descriptors, calling the add_to_class hook
         bytes_store = meta_options['client'].bytes_store if meta_options['client'] else False
-        for name, attr in cls.__dict__.items():
+        for fld_name, attr in cls.__dict__.items():
             if isinstance(attr, Field):
-                attr.add_to_class(cls, name, bytes_store)
-        
+                attr.add_to_class(cls, fld_name, bytes_store)
+
         cls._meta.prepared()
         return cls
 
@@ -68,22 +74,33 @@ class ModelOptions(object):
         self.primary_key = primary_key
         self.backref = {}
         self.exclude_from_indexes = [] #for datastore only
-        
+
     def prepared(self):
         for field in self.fields.values():
             if field.default is not None:
                 self.defaults[field] = field.default
-            if field.index == False: #will be indexed when is None/True in datastore
+            if field.index is False: #will be indexed when is None/True in datastore
                 self.exclude_from_indexes.append(field.name)
 
 class Model(object, metaclass=BaseModel):
     def __init__(self, **kwargs):
+        fields = self._meta.fields
         self._key = kwargs.get('_key', None)
-        self._data = {f.name: v() for f, v in self._meta.defaults.items()}
-        self._obj_cache = {} # cache of foreign_key objects
+        self._data = {}
+        for f, v in self._meta.defaults.items():
+            value = v()
+            #deep-copy mutable defaults, instances must never share one object
+            self._data[f.name] = copy.deepcopy(value) if isinstance(value, (dict, list, set)) else value
+        self._obj_cache = {} #cache of foreign_key objects
         self._dirty = {'__key__': True, '_id': True}
         for name, value in kwargs.items():
-            setattr(self, name, value)
+            if name == '_key':
+                self._key = value
+            elif name in fields:
+                setattr(self, name, value)
+            else:
+                #silently dropping the value would lose data on save
+                raise ValueError(f'Model "{type(self).__name__}" has no field "{name}"')
 
     @classmethod
     def create(cls, **kwargs):
@@ -105,7 +122,7 @@ class Model(object, metaclass=BaseModel):
     @classmethod
     def insert(cls, *args, **kwargs):
         return InsertQueryBuilder(cls, cls.combine_args_kwargs(*args, **kwargs))
-        
+
     @classmethod
     def insert_many(cls, datas: list):
         return InsertQueryBuilder(cls, datas)
@@ -121,18 +138,21 @@ class Model(object, metaclass=BaseModel):
         args = args[0] if args else {}
         args.update(kwargs)
         return dict(((f.name if isinstance(f, Field) else f), v) for f, v in args.items())
-        
+
     @classmethod
     def get(cls, *query, **filters):
         sq = cls.select()
         if query:
             # Handle simple lookup using just the primary key.
-            if len(query) == 1 and isinstance(query[0], str):
+            if len(query) == 1 and isinstance(query[0], (str, int)):
                 sq = sq.filter_by_id(query[0])
             else:
                 sq = sq.where(*query)
         for item, value in filters.items():
-            sq = sq.where(Filter(item, Filter.EQ, value))
+            if item == cls._meta.primary_key:
+                sq = sq.filter_by_id(value)
+            else:
+                sq = sq.where(Filter(item, Filter.EQ, value))
         return sq.get()
 
     @classmethod
@@ -155,29 +175,47 @@ class Model(object, metaclass=BaseModel):
     def get_or_none(cls, *query, **filters):
         try:
             return cls.get(*query, **filters)
-        except: # pragma: no cover
+        except Exception: # pragma: no cover
             return None
 
     @classmethod
     def get_by_key(cls, key):
+        if key is None:
+            return None
         return cls.select().filter_by_key(key).first()
 
     @classmethod
     def get_by_id(cls, sid):
+        if sid is None:
+            return None
         return cls.select().filter_by_id(sid).first()
 
     @classmethod
     def delete_by_id(cls, pk):
         return cls.delete().filter_by_id(pk).execute()
-        
+
     def save(self, **kwargs):
+        for field in self._meta.fields.values():
+            if isinstance(field, ForeignKeyField) and (not field.null) \
+                    and (self._data.get(field.name) is None):
+                raise DoesNotExist(f'Foreign key {field.name} is null')
         return self.client.update_one(self)
-        
+
     def delete_instance(self, **kwargs):
-        #foreign keys on delete cascade
-        for field in [f for f in self._meta.backref.values() if f.on_delete]:
-            field.model.delete().where(field == self.get_id()).execute()
-        self.client.delete_one(self)
+        self_id = self.get_id()
+        if self_id:
+            #foreign keys on delete
+            for field in [f for f in self._meta.backref.values() if f.on_delete]:
+                mode = field.on_delete.upper() if isinstance(field.on_delete, str) else 'CASCADE'
+                if mode in ('RESTRICT', 'PROTECT'):
+                    if field.model.select().where(field == self_id).count():
+                        raise ValueError(f'Cannot delete "{self._meta.name}" instance: '
+                            f'referenced by "{field.model.__name__}.{field.name}"')
+                elif mode == 'SET_NULL':
+                    field.model.update({field: None}).where(field == self_id).execute()
+                else: #CASCADE or any other truthy value, kept for backward compatibility
+                    field.model.delete().where(field == self_id).execute()
+        return self.client.delete_one(self)
 
     @property
     def client(self):
@@ -193,16 +231,18 @@ class Model(object, metaclass=BaseModel):
         only = [(x if isinstance(x, str) else x.name) for x in (only or [])]
         exclude = [(x if isinstance(x, str) else x.name) for x in (exclude or [])]
         should_skip = lambda n: (n in exclude) or (only and (n not in only))
-        
+
         data = {}
         for name, field in self._meta.fields.items():
             if should_skip(name):
                 continue
-            
+
             # JSONField is mutable and sometimes its changes cannot be determined
             if not only_dirty or (self._dirty.get(name) or isinstance(field, JSONField)):
-                value = getattr(self, name, None)
-                if value and isinstance(field, ForeignKeyField) and isinstance(value, Model):
+                #read from _data directly, never touch foreign objects here:
+                #it avoids useless loads and DoesNotExist on unset foreign keys
+                value = self._data.get(name)
+                if value and isinstance(field, ForeignKeyField) and is_model_instance(value):
                     value = value.get_id()
                 if db_value:
                     value = field.db_value(value)
@@ -212,7 +252,8 @@ class Model(object, metaclass=BaseModel):
             data.pop('_key', None)
             data.pop('id', None)
             data.pop('_id', None)
-        self.client.log.debug(self._meta.name + '.dicts: \n' + str(data))
+        if self.client:
+            self.client.log.debug(self._meta.name + '.dicts: \n' + str(data))
         return data
 
     @classmethod
@@ -220,9 +261,9 @@ class Model(object, metaclass=BaseModel):
         cls._meta.client = client
         for field in cls._meta.fields.values():
             field.bytes_store = client.bytes_store
-    
+
     #Used for create index
-    #MongoDB Create index commands will not recreate existing indexes and 
+    #MongoDB Create index commands will not recreate existing indexes and
     #instead return a success message indicating "all indexes already exist"
     @classmethod
     def create_table(cls, **kwargs):

@@ -12,18 +12,22 @@ __all__ = [
 ]
 
 import datetime, json
-    
+
 class DoesNotExist(Exception):
     pass
 
+def is_model_instance(value):
+    #duck-typing check for a Model instance, fields.py cannot import model.py (circular import)
+    return hasattr(value, '_meta') and hasattr(value, 'get_id')
+
 def filter_op(op):
     def inner(self, other):
-        assert(isinstance(other, Filter))
+        if not isinstance(other, Filter):
+            raise TypeError(f'Filters can only be combined with "&" or "|", got {type(other).__name__}')
+        #never mutate self, a filter object may be reused by several queries
         if self.bit_op == op:
-            self.children.append(other)
-            return self
-        else:
-            return Filter(bit_op=op, children=[self, other])
+            return Filter(bit_op=op, children=list(self.children) + [other])
+        return Filter(bit_op=op, children=[self, other])
     return inner
 
 class Filter:
@@ -61,10 +65,8 @@ class Filter:
     __or__ = filter_op('$or')
 
     def __invert__(self):
-        self.children = [self.clone()]
-        self.bit_op = self.NOR #use '$nor' instead Of '$not' can simplfy code generation
-        self.item = self.op = self.value = None
-        return self
+        #use '$nor' instead Of '$not' can simplfy code generation
+        return Filter(bit_op=self.NOR, children=[self.clone()])
 
     def __str__(self): # pragma: no cover
         if self.children:
@@ -117,7 +119,10 @@ class ForeignKeyDescriptor(FieldDescriptor):
 
     def __set__(self, instance, value):
         field_name = self.field_name
-        if isinstance(value, self.foreign_model):
+        if is_model_instance(value):
+            if self.foreign_model and not isinstance(value, self.foreign_model):
+                raise ValueError(f'Trying to set a "{type(value).__name__}" instance '
+                    f'to the foreign key "{field_name}"')
             foreign_key = value.get_id()
             if not foreign_key:
                 raise DoesNotExist(f'Foreign key {field_name} is null')
@@ -125,6 +130,7 @@ class ForeignKeyDescriptor(FieldDescriptor):
             instance._obj_cache[field_name] = value
         else:
             instance._data[field_name] = value
+            instance._obj_cache.pop(field_name, None) #drop the stale cached object
         instance._dirty[field_name] = True
 
 class BackRefDescriptor(object):
@@ -156,13 +162,13 @@ class Field(object):
         self.index = index
         self.unique = unique
         self.null = null
+        self.name = None #assigned by add_to_class
+        self.model = None #assigned by add_to_class
         self.bytes_store = False #for redis
-    
-    def __eq__(self, other):  # pragma: no cover
-        return ((other.__class__ == self.__class__) and (other.name == self.name) and 
-            (other.model == self.model))
 
     def __hash__(self):
+        if self.model is None:
+            return hash((self.__class__.__name__, self.name))
         return hash((self.model.__name__, self.name))
 
     def check_type(self, value):
@@ -182,27 +188,31 @@ class Field(object):
         return value # pragma: no cover
 
     def between(self, other1, other2):
+        #inclusive on both ends, like the SQL BETWEEN operator
         if other1 > other2:
             other1, other2 = other2, other1
-        child1 = self._generate_filter(Filter.GT, other1)
-        child2 = self._generate_filter(Filter.LT, other2)
+        child1 = self._generate_filter(Filter.GE, other1)
+        child2 = self._generate_filter(Filter.LE, other2)
         return Filter(bit_op=Filter.AND, children=[child1, child2])
 
     #emulating the startswith using a combined query
     def startswith(self, txt):
-        assert(isinstance(txt, str))
+        if not isinstance(txt, str):
+            raise TypeError(f'startswith() requires a string prefix, got {type(txt).__name__}')
         child1 = self._generate_filter(Filter.GE, txt)
-        child2 = self._generate_filter(Filter.LE, txt + '~') #'~' if the max ascii (0x7e)
+        #'\U0010ffff' is the highest unicode codepoint, so non-ascii texts match also
+        child2 = self._generate_filter(Filter.LE, txt + '\U0010ffff')
         return Filter(bit_op=Filter.AND, children=[child1, child2])
 
     def _generate_filter(self, op, other):
-        if self.enforce_type and not self.check_type(other):
+        #a list/tuple/set is reserved for in_/not_in, skip the type check for them
+        if self.enforce_type and not isinstance(other, (list, tuple, set)) and not self.check_type(other):
             raise ValueError(f"Comparing field '{self.name}' with '{other}' of type {type(other)}")
         return Filter(self.name, op, other)
 
     def asc(self):
         return self.name
-        
+
     def desc(self):
         return '-{}'.format(self.name)
 
@@ -214,7 +224,7 @@ class Field(object):
     __ge__ = comp_op(Filter.GE)
     in_ = comp_op(Filter.IN)
     not_in = comp_op(Filter.NIN)
-    
+
     __add__ = arith_op('+')
     __sub__ = arith_op('-')
     __mul__ = arith_op('*')
@@ -233,8 +243,13 @@ class Field(object):
 
 class PrimaryKeyField(Field):
     def _generate_filter(self, op, other):
-        other = self.model._meta.client.ensure_key(other)
-        return Filter(self.model._meta.client.db_id_name(), op, other)
+        client = self.model._meta.client
+        kind = self.model._meta.name
+        if isinstance(other, (list, tuple, set)):
+            other = [client.ensure_key(item, kind) for item in other]
+        else:
+            other = client.ensure_key(other, kind)
+        return Filter(client.db_id_name(), op, other)
     def db_value(self, value):
         if self.bytes_store:
             return value.encode('utf-8') if isinstance(value, str) else value
@@ -264,7 +279,7 @@ class ForeignKeyField(Field):
             setattr(self.foreign_model, self.backref, BackRefDescriptor(self))
 
     def db_value(self, value):
-        if isinstance(value, self.foreign_model):
+        if is_model_instance(value):
             value = value.get_id()  # pragma: no cover
         if self.bytes_store:
             return value.encode('utf-8') if isinstance(value, str) else value
@@ -274,11 +289,24 @@ class ForeignKeyField(Field):
         if self.bytes_store:
             return value.decode('utf-8') if isinstance(value, bytes) else value
         else:
-            return value    
+            return value
 
     def _generate_filter(self, op, other):
-        other = self.model._meta.client.ensure_key(other)
-        return Filter(self.name, op, str(other))
+        #the stored foreign key value is always the string form of the referenced key,
+        #so convert the compared value into exactly the same form
+        client = self.model._meta.client
+        kind = self.foreign_model._meta.name
+        def to_id(item):
+            if is_model_instance(item):
+                item = item.get_id()
+            if item is None:
+                return None
+            return client.key_to_id(client.ensure_key(item, kind))
+        if isinstance(other, (list, tuple, set)):
+            other = [to_id(item) for item in other]
+        else:
+            other = to_id(other)
+        return Filter(self.name, op, other)
 
 class BooleanField(Field):
     def db_value(self, value):
@@ -355,7 +383,7 @@ class BlobField(Field):
     def __init__(self, **kwargs):
         kwargs.setdefault('index', False)
         super().__init__(**kwargs)
-        
+
     def check_type(self, value):
         return isinstance(value, bytes)
     def db_value(self, value):
@@ -372,8 +400,10 @@ class DateTimeField(Field):
         if self.bytes_store:
             if isinstance(value, datetime.datetime):
                 value = value.strftime(self.default_tmfmt)
+            elif value:
+                value = str(value)
             else:
-                value = value or ''
+                value = ''
             return value.encode('utf-8')
         elif isinstance(value, datetime.datetime):
             return value.replace(tzinfo=None)
@@ -383,7 +413,7 @@ class DateTimeField(Field):
     def python_value(self, value):
         if isinstance(value, bytes):
             value = value.decode('utf-8')
-        
+
         if self.bytes_store:
             return datetime.datetime.strptime(value, self.default_tmfmt).replace(tzinfo=None) if value else None
         elif isinstance(value, datetime.datetime):
@@ -445,13 +475,12 @@ class UpdateExpr:
         if isinstance(inst, Field):
             inst = f'e.{inst.name}'
         elif isinstance(inst, str):
-            inst = f'"{inst}"'  # pragma: no cover
-            
+            inst = repr(inst) #repr() escapes the quotes properly  # pragma: no cover
+
         other = self.other
         if isinstance(other, Field):
             other = f'e.{other.name}'
         elif isinstance(other, str):
-            other = f'"{other}"'  # pragma: no cover
-        
-        return f'({inst} {self.op} {other})'
+            other = repr(other) #repr() escapes the quotes properly  # pragma: no cover
 
+        return f'({inst} {self.op} {other})'

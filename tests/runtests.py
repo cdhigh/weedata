@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-import re, os, shutil, sys, unittest, importlib, coverage
+import os, sys, unittest, importlib, coverage
 
-testDir = os.path.dirname(__file__)
+testDir = os.path.abspath(os.path.dirname(__file__)) #absolute: sys.path[0] stays relative before py3.11
 weedataDir = os.path.abspath(os.path.join(testDir, '..', 'src'))
 sys.path.insert(0, weedataDir)
+sys.path.insert(0, testDir) #for the fake_datastore stub, imported by client.py when mocked
 
 def runtests(suite, verbosity=1, failfast=False):
     runner = unittest.TextTestRunner(verbosity=verbosity, failfast=failfast)
@@ -25,47 +26,19 @@ def reload_module(module_name):
     importlib.reload(module)
     return module
 
-class DatastoreMocker:
-    def __init__(self, backEnd):
-        self.backEnd = backEnd
-    def mock(self, act):
-        pklFile = os.path.join(testDir, 'fake_datastore.pkl')
-        if os.path.exists(pklFile):
-            os.remove(pklFile)
+def backend_available(env):
+    #skip the backends whose driver is not installed
+    if env == 'redis':
+        return importlib.util.find_spec('redis') is not None
+    elif env == 'mongodb':
+        return importlib.util.find_spec('pymongo') is not None
+    return True
 
-        clientPy = os.path.join(weedataDir, 'weedata', 'client.py')
-        with open(clientPy, 'r', encoding='utf-8') as f:
-            lines = f.read().splitlines()
-
-        newLines = lines[:]
-        for idx in range(50):
-            if act == 'mock':
-                if newLines[idx] == "#if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore':":
-                    newLines[idx] = "if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore':"
-                if newLines[idx] == "#    from fake_datastore import *":
-                    newLines[idx] = "    from fake_datastore import *"
-                if newLines[idx] == "#    print('Alert: using fake datastore stub!!!')":
-                    newLines[idx] = "    print('Alert: using fake datastore stub!!!')"
-            elif act == 'unmock':
-                if newLines[idx] == "if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore':":
-                    newLines[idx] = "#if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore':"
-                if newLines[idx] == "    from fake_datastore import *":
-                    newLines[idx] = "#    from fake_datastore import *"
-                if newLines[idx] == "    print('Alert: using fake datastore stub!!!')":
-                    newLines[idx] = "#    print('Alert: using fake datastore stub!!!')"
-
-        if newLines != lines:
-            print(f'module datastore {act}ed.')
-            with open(clientPy, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(newLines))
-
-    def __enter__(self):
-        if self.backEnd == 'datastore':
-            self.mock('mock')
-        return self
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.backEnd == 'datastore':
-            self.mock('unmock')
+def clean_fake_datastore():
+    #the fake datastore stub persists entities in a pkl file
+    pklFile = os.path.join(testDir, 'fake_datastore.pkl')
+    if os.path.exists(pklFile):
+        os.remove(pklFile)
 
 def start_test(verbosity=1, failfast=0, testonly='', report=''):
     if report:
@@ -75,11 +48,14 @@ def start_test(verbosity=1, failfast=0, testonly='', report=''):
     envs = os.getenv('WEEDATA_TEST_BACKEND')
     envs = [envs] if envs else ['datastore', 'redis', 'mongodb', 'pickle']
     for env in envs:
+        if not backend_available(env):
+            print(f'skipping tests for database "{env}" (driver not installed)')
+            continue
         print(f'starting tests for database "{env}"')
         os.environ['WEEDATA_TEST_BACKEND'] = env
-        with DatastoreMocker(env):
-            runtests(collect_tests(testonly), verbosity, failfast)
-        
+        clean_fake_datastore()
+        runtests(collect_tests(testonly), verbosity, failfast)
+
     if report:
         cov.stop()
         cov.save()
@@ -88,8 +64,8 @@ def start_test(verbosity=1, failfast=0, testonly='', report=''):
         else:
             cov.report()
 
-TEST_MODULES = ['test_base', 'test_fields', 'test_save', 'test_queries', 
-                'test_update', 'test_delete', 'test_connection']
+TEST_MODULES = ['test_base', 'test_fields', 'test_save', 'test_queries',
+                'test_update', 'test_delete', 'test_connection', 'test_fixes']
 
 if __name__ == '__main__':
     verbosity = 1 #Verbosity of output
@@ -101,7 +77,7 @@ if __name__ == '__main__':
     #os.environ['WEEDATA_TEST_BACKEND'] = 'redis'
     #os.environ['WEEDATA_TEST_BACKEND'] = 'pickle'
     #os.environ['WEEDATA_TEST_BACKEND'] = 'datastore'
-    
+
     os.environ['WEEDATA_TEST_VERBOSITY'] = str(verbosity)
     os.environ['WEEDATA_SLOW_TESTS'] = '1' #Run tests that may be slow
 

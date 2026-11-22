@@ -123,7 +123,7 @@ class TestUpdating(ModelTestCase):
         self.assertEqual(User.get(User.id == id_).email, '10@10')
 
         #Tweet without unique fields
-        with self.assertRaisesCtx(AttributeError):
+        with self.assertRaisesCtx(ValueError):
             Tweet.replace(user_id='user1', content='new', liked=1, disliked=20).execute()
 
         with self.assertRaisesCtx(ValueError):

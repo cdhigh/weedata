@@ -432,6 +432,20 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 
 # Changelog  
+* v0.2.8
+1. Bugfix: datastore save() of a never-fetched instance created a new entity every time and delete_instance() silently failed, the real datastore key is now kept on the model.
+2. Bugfix: get_by_id(None/0/'') returned an arbitrary record, get_by_id(None) now returns None and None keys are rejected in filters instead of being silently dropped.
+3. Bugfix: filter objects are no longer mutated by & / | / ~, reusing a filter cannot change the semantics of earlier queries; several top-level OR filters are ANDed instead of overwriting each other.
+4. Bugfix: between() is inclusive on both ends like SQL BETWEEN, startswith() works with non-ascii texts.
+5. Bugfix: primary key filters accept int values and id lists on all backends, foreign key filters use the same string form as the stored values (datastore foreign key queries used to match nothing).
+6. Bugfix: redis can save None values (absent fields read back as None), uses hset instead of the deprecated hmset, create_index() accepts a list of field names, and indexed DateTimeField/JSONField fields no longer crash on insert.
+7. Bugfix: comparing an unset (None) field with < > <= >= no longer crashes the scan, order_by() tolerates None values, a missed id fast-path no longer yields a None record.
+8. Bugfix: MongoDbClient uses update_one() (Collection.update was removed in pymongo 4.x), delete_instance() works on never-fetched instances, count() respects limit(), drop_table() accepts a plain collection name.
+9. Bugfix: query.dicts() forwards the limit parameter; limit() validates its input; the update expression evaluator escapes string operands and restricts evaluation to model fields only.
+10. Bugfix: save() rejects unknown field names instead of silently losing them, replace()/update() reject unknown fields, JSONField(default={}) no longer shares one dict between instances, assigning a foreign key by id refreshes its cached object.
+11. Bugfix: on_delete supports CASCADE (default/True), SET_NULL and RESTRICT/PROTECT; PickleDbClient parses windows drive paths inside pickle:// URLs.
+12. Tests: new regression tests in tests/test_fixes.py, the fake datastore no longer corrupts projected entities, backends whose driver is not installed are skipped.
+
 * v0.2.7
 1. bugfix: fix query.dicts function
 

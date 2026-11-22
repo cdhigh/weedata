@@ -4,7 +4,7 @@
 #Author: cdhigh <http://github.com/cdhigh>
 #Repository: <https://github.com/cdhigh/weedata>
 #Pypi package: <https://pypi.org/project/weedata>
-import os, sys, uuid, pickle, shutil, logging
+import os, re, sys, uuid, pickle, shutil, logging
 from itertools import chain
 from operator import attrgetter
 from collections import defaultdict
@@ -14,26 +14,34 @@ try:
     from google.cloud import datastore
     from google.cloud.datastore import Key
     from google.cloud.datastore import query as qr
-except:  # pragma: no cover
+except Exception:  # pragma: no cover
     datastore = None
+    Key = None
+    qr = None
 
 try:
     import pymongo
     from bson.objectid import ObjectId
-except:  # pragma: no cover
+except Exception:  # pragma: no cover
     pymongo = None
 
 try:
     import redis
-except:  # pragma: no cover
+except Exception:  # pragma: no cover
     redis = None
 
 from .model import Model, BaseModel
-from .fields import Filter
+from .fields import Field, Filter
 
-#if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore':
-#    from fake_datastore import *
-#    print('Alert: using fake datastore stub!!!')
+if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore': # pragma: no cover
+    from fake_datastore import *
+    print('Alert: using fake datastore stub!!!')
+
+class FakeTransaction:
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
 
 class NosqlClient(object):
     bytes_store = False #For redis, it's True
@@ -60,23 +68,28 @@ class NosqlClient(object):
     def connect(self, **kwargs):
         return True
     def atomic(self, **kwargs):
-        return fakeTransation()
+        return FakeTransaction()
     def transaction(self, **kwargs):
-        return fakeTransation()
+        return FakeTransaction()
+    def key_to_id(self, key):
+        #convert a native key object into the string form stored in id/foreign key fields
+        return str(key)
     @classmethod
     def op_map(cls, op):
         return op
-    
+
 class DatastoreClient(NosqlClient):
     def __init__(self, project=None, namespace=None, credentials=None, _http=None):
         super().__init__()
+        if datastore is None: # pragma: no cover
+            raise ImportError('google-cloud-datastore is required for DatastoreClient')
         self.project = project or os.getenv("GOOGLE_CLOUD_PROJECT", None)
         self.credentials = credentials
         self.namespace = namespace
         self._http = _http
-        self.client = datastore.Client(project=self.project, namespace=self.namespace, 
+        self.client = datastore.Client(project=self.project, namespace=self.namespace,
             credentials=self.credentials, _http=self._http)
-    
+
     @classmethod
     def db_id_name(cls):
         return "__key__"
@@ -108,21 +121,24 @@ class DatastoreClient(NosqlClient):
 
     def update_one(self, model):
         data = model.dicts(remove_id=True, db_value=True, only_dirty=False) #datastore update all fields always
-        entity = self.create_entity(data, model, key=model._key)
+        entity = self.create_entity(data, model, key=self.model_key(model))
         if data:
             self.client.put(entity)
             model.clear_dirty(list(data.keys()))
+        #keep the real key, so later saves update the same entity instead of duplicating it
+        model._key = entity.key
         return model.set_id(entity.key.to_legacy_urlsafe().decode())
-        
+
     def delete_one(self, model):
-        if model._key:
-            self.client.delete(model._key)
+        key = self.model_key(model)
+        if key:
+            self.client.delete(key)
             return 1
         else:
             return 0
 
     def delete_many(self, models):
-        keys = [e._key for e in models if e._key]
+        keys = [k for k in (self.model_key(e) for e in models) if k]
         if keys:
             self.client.delete_multi(keys)
             return len(keys)
@@ -130,55 +146,82 @@ class DatastoreClient(NosqlClient):
             return 0
 
     def execute(self, queryObj, page_size=500, parent_key=None, limit=None, as_dict=False):
+        if self.has_impossible_filter(queryObj._filters):
+            return #a condition that can never match, e.g. in_([])
         klass = queryObj.model_class
         kind = klass._meta.name
         query = self.client.query(kind=kind, ancestor=parent_key)
         self.apply_query_condition(queryObj, query)
 
-        limit = limit if limit else queryObj._limit
+        limit = limit if (limit and limit > 0) else queryObj._limit
         batch_size = min(page_size, limit) if limit else page_size
         yield from self.query_fetch(query, batch_size, limit, klass, as_dict)
 
     #count aggregation query
     def count(self, queryObj, parent_key=None):
         return self.aggre_execute(queryObj, parent_key, 'count')
-        
+
     #sum aggregation query
     def sum(self, queryObj, field, parent_key=None):  # pragma: no cover
         field = field.name if isinstance(field, Field) else field
         return self.aggre_execute(queryObj, parent_key, 'sum', field)
-        
+
     #avg aggregation query
     def avg(self, queryObj, field, parent_key=None):  # pragma: no cover
         field = field.name if isinstance(field, Field) else field
         return self.aggre_execute(queryObj, parent_key, 'avg', field)
-        
+
     #aggregation query
     #func: 'count', 'sum', 'avg'
     #arg: field name if func is 'sum' or 'avg'
     def aggre_execute(self, queryObj, parent_key, func, arg=None):
+        if self.has_impossible_filter(queryObj._filters):
+            return 0
         kind = queryObj.model_class._meta.name
         query = self.client.query(kind=kind, ancestor=parent_key)
         self.apply_query_condition(queryObj, query)
         query_func = getattr(self.client.aggregation_query(query=query), func)
         query = query_func(arg) if arg else query_func()
         with query.fetch() as result:
-            return next(result).value if result else 0
+            try:
+                return next(result).value
+            except StopIteration:
+                return 0
 
-    #generate model instance(klass!=None) or entity(klass=None)
+    #True when the filter tree can never match any row (an empty in_() list for example)
+    def has_impossible_filter(self, filters):
+        for f in filters or []:
+            if f.bit_op == Filter.AND:
+                if any(self.has_impossible_filter([c]) for c in f.children):
+                    return True
+            elif f.bit_op == Filter.OR:
+                if f.children and all(self.has_impossible_filter([c]) for c in f.children):
+                    return True
+            elif not f.bit_op:
+                if f.op == Filter.IN and isinstance(f.value, (list, tuple, set)) and not f.value:
+                    return True
+            #NOR never forces an empty result by itself
+        return False
+
+    #make Model instance(klass!=None) or entity(klass=None)
     def query_fetch(self, query, batch_size=500, limit=0, klass=None, as_dict=False):
         cursor = None
         count = 0
         while True:
+            if limit and (count >= limit):
+                break
             last_entity = None
-            result = query.fetch(start_cursor=cursor, limit=batch_size)
+            fetch_limit = batch_size
+            if limit and (limit - count) < batch_size:
+                fetch_limit = limit - count
+            result = query.fetch(start_cursor=cursor, limit=fetch_limit)
 
             for entity in result:
                 last_entity = self.make_instance(klass, entity) if klass else entity
                 yield last_entity.dicts() if (last_entity and as_dict) else last_entity
                 count += 1
             cursor = result.next_page_token
-            if not cursor or (last_entity is None) or (limit and (count >= limit)):
+            if not cursor or (last_entity is None):
                 break
 
     #make Model instance from database data
@@ -215,20 +258,21 @@ class DatastoreClient(NosqlClient):
             if not query_dict:
                 return []
 
+            for op in query_dict.keys():
+                if op == Filter.NOR:
+                    raise ValueError('datastore does not support nor query')
+
             converted = []
             for op in query_dict.keys():
                 if op in (Filter.OR, Filter.AND): #recrusive
-                    flts = list(chain.from_iterable([to_ds_query(subquery) for subquery in query_dict[op]]))
+                    flts = list(chain.from_iterable(to_ds_query(subquery) for subquery in query_dict[op]))
                     converted.append(qr.Or(flts) if op == Filter.OR else qr.And(flts))
-                elif op == Filter.NOR:
-                    raise ValueError('datastore does not support nor query')
-                else:
-                    for field, condition in query_dict.items():
-                        if isinstance(condition, dict):
-                            for op2, value in condition.items():
-                                converted.append(qr.PropertyFilter(field, op2, value))
-                        else:
-                            converted.append(qr.PropertyFilter(field, '=', condition))
+
+            #plain fields, every one of them is appended exactly once
+            for field, condition in query_dict.items():
+                if isinstance(condition, dict):
+                    for op2, value in condition.items():
+                        converted.append(qr.PropertyFilter(field, op2, value))
             return converted
 
         result = to_ds_query(mongo_filters)
@@ -266,12 +310,28 @@ class DatastoreClient(NosqlClient):
     def ensure_key(self, key, kind=None):
         if isinstance(key, Model):
             key = key.get_id()
+        if key is None:
+            raise ValueError('Can not build a datastore key from None')
         if isinstance(key, Key):
             return key
-        elif kind and (isinstance(key, int) or key.isdigit()):
+        if isinstance(key, bytes):
+            key = key.decode('utf-8')
+        if kind and (isinstance(key, int) or key.isdigit()):
             return self.generate_key(kind, int(key))
         else:
             return Key.from_legacy_urlsafe(key)
+
+    def key_to_id(self, key):
+        #convert a native key to the string form stored in id/foreign key fields
+        return key.to_legacy_urlsafe().decode() if isinstance(key, Key) else key
+
+    #return the datastore key of an instance, deriving it from the app-level id when needed
+    def model_key(self, model):
+        if model._key is None:
+            gid = model.get_id()
+            if gid:
+                model._key = self.ensure_key(gid, model._meta.name)
+        return model._key
 
     def drop_table(self, model, parent_key=None):
         #compatible for class and instance
@@ -296,11 +356,13 @@ class DatastoreClient(NosqlClient):
 class MongoDbClient(NosqlClient):
     def __init__(self, project, dbUrl='mongodb://127.0.0.1:27017/'):
         super().__init__()
+        if pymongo is None: # pragma: no cover
+            raise ImportError('pymongo is required for MongoDbClient')
         self.project = project
         self.dbUrl = dbUrl
         self.client = pymongo.MongoClient(self.dbUrl, connect=False)
         self._db = self.client[project]
-    
+
     @classmethod
     def db_id_name(cls):
         return "_id"
@@ -312,39 +374,43 @@ class MongoDbClient(NosqlClient):
         return str(id_)
 
     def insert_many(self, klass, datas: list):
+        if not datas: #pymongo refuses an empty list
+            return []
         datas = [klass(**data).dicts(remove_id=True, db_value=True) for data in datas]
         ids = self._db[klass._meta.name].insert_many(datas).inserted_ids
         return [str(id_) for id_ in ids]
-        
+
     def update_one(self, model):
         id_ = model.get_id()
         if id_: #update
             data = model.dicts(remove_id=True, db_value=True, only_dirty=True)
             if data:
-                self._db[model._meta.name].update({'_id': ObjectId(id_)}, {'$set': data})
+                self._db[model._meta.name].update_one({'_id': self.ensure_key(id_)}, {'$set': data})
                 model.clear_dirty(list(data.keys()))
             return model
         else: #insert
-            data = model.dicts(remove_id=True)
+            data = model.dicts(remove_id=True, db_value=True)
             model.clear_dirty(list(data.keys()))
             return model.set_id(self.insert_one(model.__class__, data))
-     
+
     def delete_one(self, model):
-        if model._id:
-            return self._db[model._meta.name].delete_one({'_id': model._id}).deleted_count
+        id_ = model.get_id()
+        if id_:
+            return self._db[model._meta.name].delete_one({'_id': self.ensure_key(id_)}).deleted_count
         else:
             return 0
 
     def delete_many(self, models):
         return sum([self.delete_one(model) for model in models])
-        
+
     def execute(self, queryObj, page_size=500, parent_key=None, limit=None, as_dict=False):
         klass = queryObj.model_class
         collection = self._db[klass._meta.name]
         sort = [(item[1:], pymongo.DESCENDING) if item.startswith('-') else (item, pymongo.ASCENDING) for item in queryObj._order]
         projection = self.build_projection(queryObj)
-        limit = limit if limit else queryObj._limit
+        limit = limit if (limit and limit > 0) else queryObj._limit
         if queryObj._distinct:
+            #distinct returns raw field values, model instances do not apply here
             for data in collection.distinct(queryObj._distinct[0], queryObj.filters()):
                 yield data
         else:
@@ -358,7 +424,10 @@ class MongoDbClient(NosqlClient):
                     yield inst.dicts() if (inst and as_dict) else inst
 
     def count(self, queryObj, parent_key=None):
-        return self._db[queryObj.model_class._meta.name].count_documents(queryObj.filters())
+        kwargs = {}
+        if queryObj._limit: #a limited select counts up to the limit, like peewee does
+            kwargs['limit'] = queryObj._limit
+        return self._db[queryObj.model_class._meta.name].count_documents(queryObj.filters(), **kwargs)
 
     #make Model instance from database data
     def make_instance(self, klass, raw):
@@ -390,16 +459,26 @@ class MongoDbClient(NosqlClient):
             key = key.get_id()
         if isinstance(key, ObjectId):
             return key
-        else:
+        if key is None:
+            raise ValueError('Can not build an ObjectId from None')
+        if isinstance(key, bytes):
+            key = key.decode('utf-8')
+        try:
             return ObjectId(key)
+        except Exception as e:
+            raise ValueError(f'Invalid ObjectId: {key!r}') from e
+
+    def key_to_id(self, key):
+        return str(key)
 
     #keys: a single key or a list of (key, direction) pairs
     def create_index(self, model, keys, unique=False, **kwargs):
         self._db[model._meta.name].create_index(keys, unique=unique, **kwargs)
 
     def drop_table(self, model):
-        model = model._meta.name if issubclass(model, Model) else model
-        self._db.drop_collection(model)
+        #compatible for class, instance and plain name
+        name = model if isinstance(model, str) else model._meta.name
+        self._db.drop_collection(name)
 
     def close(self):
         self.client.close()
@@ -411,6 +490,8 @@ class RedisDbClient(NosqlClient):
 
     def __init__(self, project, dbUrl='redis://127.0.0.1:6379/0', key_sep=':'):
         super().__init__()
+        if redis is None: # pragma: no cover
+            raise ImportError('redis is required for RedisDbClient')
         self.redis = redis.from_url(dbUrl)
         self.prefix = f'{project}{key_sep}'
         self.key_sep = key_sep
@@ -454,15 +535,25 @@ class RedisDbClient(NosqlClient):
         id_ = self.generate_id()
         model = klass(**data)
         data = model.dicts(remove_id=True, db_value=True)
-        self.redis.hmset(self.build_key(klass, id_=id_), data)
+        key = self.build_key(klass, id_=id_)
+        self.save_hash(key, data)
         indexes = self.indexes.get(klass._meta.name, None)
         if indexes:
             self.add_index(indexes, klass, data, id_)
         return id_
 
+    #redis can not store None values, absent fields are read back as None
+    def save_hash(self, key, data):
+        null_fields = [k for k, v in data.items() if v is None]
+        data = {k: v for k, v in data.items() if v is not None}
+        if data:
+            self.redis.hset(key, mapping=data) #hmset is deprecated
+        if null_fields:
+            self.redis.hdel(key, *null_fields)
+
     def insert_many(self, klass, datas: list):
         return [self.insert_one(klass, data) for data in datas]
-        
+
     def update_one(self, model):
         id_ = model.get_id()
         if id_: #update
@@ -476,7 +567,7 @@ class RedisDbClient(NosqlClient):
                     if old_data:
                         old_data[self.db_id_name()] = id_
                         index_changed = model.index_changed(self.make_instance(model.__class__, old_data))
-                self.redis.hmset(key, data)
+                self.save_hash(key, data)
                 if index_changed:
                     self.rebuild_index(model.__class__)
                 model.clear_dirty(list(data.keys()))
@@ -485,7 +576,7 @@ class RedisDbClient(NosqlClient):
             data = model.dicts(remove_id=True)
             model.clear_dirty(list(data.keys()))
             return model.set_id(self.insert_one(model.__class__, data))
-     
+
     def delete_one(self, model):
         id_ = model.get_id()
         cnt = 0
@@ -497,30 +588,31 @@ class RedisDbClient(NosqlClient):
 
     def delete_many(self, models):
         return sum([self.delete_one(model) for model in models])
-        
+
     def execute(self, queryObj, page_size=500, parent_key=None, limit=None, as_dict=False):
         klass = queryObj.model_class
         _filters = queryObj._filters
+        limit = limit if (limit and limit > 0) else queryObj._limit
         if len(_filters) == 1:
             flt = _filters[0]
             if flt.isFilterById(self.db_id_name()):
                 inst = self.get_by_id(klass, flt.value)
-                yield inst.dicts() if (inst and as_dict) else inst
+                if inst: #no match must not yield a None item
+                    yield inst.dicts() if as_dict else inst
                 return
             elif self.indexes.get(klass._meta.name) and self.isFilterByIndex(klass, flt):
-                yield from self.get_by_index(klass, flt, as_dict)
+                yield from self.get_by_index(klass, flt, as_dict, limit=limit)
                 return
-            
+
         filters = [flt.clone('utf-8') for flt in _filters]
         fields = {name.encode('utf-8'): inst for name, inst in klass._meta.fields.items()}
         results = []
         key_sep = self.key_sep.encode('utf-8')
         id_name = self.db_id_name().encode('utf-8')
-        limit = limit or queryObj._limit
         order = [o.lstrip('-') for o in queryObj._order]
         #All fields have to be some in reverse attribute
         reverse = any(o.startswith('-') for o in queryObj._order)
-        
+
         cnt = 0
         for key, data in self.iter_data(klass, type_='key_data'):
             data[id_name] = key.rsplit(key_sep, 1)[-1] #set primary key
@@ -532,7 +624,14 @@ class RedisDbClient(NosqlClient):
 
         results = [self.make_instance(klass, r) for r in results]
         if order:
-            results.sort(key=attrgetter(*order), reverse=reverse)
+            def sort_key(inst):
+                #None sorts after all normal values and must not crash the comparison
+                vals = []
+                for name in order:
+                    v = getattr(inst, name, None)
+                    vals.append((v is None, v))
+                return tuple(vals)
+            results.sort(key=sort_key, reverse=reverse)
 
         for inst in (results[:limit] if limit else results):
             yield inst.dicts() if (inst and as_dict) else inst
@@ -562,11 +661,16 @@ class RedisDbClient(NosqlClient):
         else:
             return None
 
-    def get_by_index(self, klass, flt, as_dict=False):
+    def get_by_index(self, klass, flt, as_dict=False, limit=0):
         key = self.build_key(klass, index=(flt.item, flt.value))
+        cnt = 0
         for id_ in self.redis.smembers(key):
+            if limit and (cnt >= limit):
+                return
             inst = self.get_by_id(klass, id_)
-            yield inst.dicts() if (inst and as_dict) else inst
+            if inst: #skip stale index entries
+                cnt += 1
+                yield inst.dicts() if as_dict else inst
 
     def _matches_query(self, data: dict, flt: Filter, fields: dict):
         if not flt.bit_op:
@@ -577,6 +681,8 @@ class RedisDbClient(NosqlClient):
             op = flt.op
             value = flt.value
             dbValue = fields[item].python_value(data.get(item, None))
+            if dbValue is None and op in (Filter.LT, Filter.GT, Filter.LE, Filter.GE):
+                return False #None is not comparable, matches no ordering condition
 
             return (((op == Filter.EQ) and (dbValue == value)) or
                 ((op == Filter.NE) and (dbValue != value)) or
@@ -594,7 +700,7 @@ class RedisDbClient(NosqlClient):
             return not any(self._matches_query(data, c, fields) for c in flt.children)
         else:
             raise ValueError(f"Unsupported bit operator: {flt.bit_op}") # pragma: no cover
-        
+
     def count(self, queryObj, parent_key=None):
         return len(list(self.execute(queryObj)))
 
@@ -605,16 +711,25 @@ class RedisDbClient(NosqlClient):
         for name, value in raw.items():
             name = name.decode('utf-8') if isinstance(name, bytes) else name
             setattr(inst, name, fields[name].python_value(value) if name in fields else value)
-            
+
         inst.clear_dirty(list(fields.keys()))
         return inst.set_id(str(getattr(inst, self.db_id_name())))
 
     def ensure_key(self, key, kind=None):
-        return key.get_id() if isinstance(key, Model) else str(key)
-    
-    #keys: a single key or a list of (key, direction) pairs
+        if isinstance(key, Model):
+            key = key.get_id()
+        if key is None:
+            raise ValueError('Can not build a key from None')
+        if isinstance(key, bytes):
+            key = key.decode('utf-8')
+        return str(key)
+
+    #keys: a single field name, a list of field names, or a list of (name, direction) pairs
     def create_index(self, model, keys, unique=False, **kwargs):
-        keys = [key[0] for key in keys] if isinstance(keys, list) else [keys]
+        if isinstance(keys, str):
+            keys = [keys]
+        else:
+            keys = [key[0] if isinstance(key, (list, tuple)) else key for key in keys]
         for key in keys:
             self.indexes[model._meta.name].add(key)
 
@@ -623,17 +738,17 @@ class RedisDbClient(NosqlClient):
         for field_name in indexes:
             value = data.get(field_name, None)
             if value is not None: #index is id set
-                value = klass._meta.fields[field_name].db_value(value).decode('utf-8')
+                value = value.decode('utf-8') if isinstance(value, bytes) else str(value)
                 index = self.build_key(klass, index=(field_name, value))
                 self.redis.sadd(index, id_)
-        
+
     def rebuild_index(self, klass):
         self.drop_index(klass)
         indexes = self.indexes.get(klass._meta.name, [])
         indexes = [(idx, self.build_key(klass, index=(idx, ''))) for idx in indexes]
         if not indexes:
             return #This model have no index required  # pragma: no cover
-        
+
         for key, data in self.iter_data(klass, type_='key_data'):
             id_ = key.rsplit(self.key_sep.encode('utf-8'), 1)[-1]
             for field_name, index in indexes:
@@ -654,7 +769,7 @@ class RedisDbClient(NosqlClient):
         else: #drop the whole index of table
             for key in self.iter_data(model, type_='index'):
                 self.redis.delete(key)
-        
+
     def drop_table(self, model):
         assert(isinstance(model, BaseModel)) #is a class
         self.drop_index(model)
@@ -669,12 +784,14 @@ class PickleDbClient(RedisDbClient):
         if '://' in dbName:
             ret = urlparse(dbName)
             dbName = ret.netloc or ret.path
+            if ret.netloc and re.match(r'^[A-Za-z]:$', ret.netloc): #windows drive inside the netloc
+                dbName = ret.netloc + (ret.path or '/')
             _plat = sys.platform.lower()
             if ('win32' in _plat or 'win64' in _plat): #windows平台
                 dbName = dbName.lstrip('/')
             elif dbName.startswith('//'):
                 dbName = dbName[1:]
-                
+
             qs = parse_qs(ret.query)
             if 'bakBeforeWrite' in qs:
                 bakBeforeWrite = qs['bakBeforeWrite'][0].lower() in ('yes', 'true', '1')
@@ -700,7 +817,7 @@ class PickleDbClient(RedisDbClient):
             try:
                 with open(self.dbName, 'rb') as f:
                     self.pickleDb = pickle.loads(f.read())
-            except:
+            except Exception:
                 pass
         if os.path.exists(self.bakDbName):
             if self.bakBeforeWrite and not isinstance(self.pickleDb, dict):
@@ -709,12 +826,12 @@ class PickleDbClient(RedisDbClient):
                         self.pickleDb = pickle.loads(f.read())
                     if isinstance(self.pickleDb, dict):
                         shutil.copyfile(self.bakDbName, self.dbName)
-                except:
+                except Exception:
                     pass
             elif not self.bakBeforeWrite:
                 try:
                     os.remove(self.bakDbName)
-                except:
+                except Exception:
                     pass
 
         if not isinstance(self.pickleDb, dict):
@@ -755,7 +872,7 @@ class PickleDbClient(RedisDbClient):
             data = model.dicts(remove_id=True)
             model.clear_dirty(list(data.keys()))
             return model.set_id(self.insert_one(model.__class__, data))
-     
+
     def delete_one(self, model):
         id_ = model.get_id()
         if id_ and self.pickleDb.pop(self.build_key(model, id_=id_), None) is not None:
@@ -775,6 +892,7 @@ class PickleDbClient(RedisDbClient):
     def get_by_id(self, klass, id_):
         data = self.pickleDb.get(self.build_key(klass, id_=id_), None)
         if data:
+            data = dict(data) #do not touch the stored record
             data[self.db_id_name()] = id_
             return self.make_instance(klass, data)
         else:
@@ -789,9 +907,3 @@ class PickleDbClient(RedisDbClient):
         for key in [x for x in self.pickleDb if x.startswith(pattern)]:
             del self.pickleDb[key]
         self.save_db()
-
-class fakeTransation:
-    def __enter__(self):
-        return self
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
