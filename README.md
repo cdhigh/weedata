@@ -432,6 +432,9 @@ User.replace(name='python', score=100, birthdate=datetime.datetime(2024,1,1)).ex
 
 
 # Changelog  
+* v0.2.9
+1. Documentation & build: include README.md as package description on PyPI; setuptools build requirement updated.
+
 * v0.2.8
 1. Bugfix: datastore save() of a never-fetched instance created a new entity every time and delete_instance() silently failed, the real datastore key is now kept on the model.
 2. Bugfix: get_by_id(None/0/'') returned an arbitrary record, get_by_id(None) now returns None and None keys are rejected in filters instead of being silently dropped.
