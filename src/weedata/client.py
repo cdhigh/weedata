@@ -34,8 +34,11 @@ from .model import Model, BaseModel
 from .fields import Field, Filter
 
 if os.environ.get('WEEDATA_TEST_BACKEND') == 'datastore': # pragma: no cover
-    from fake_datastore import *
-    print('Alert: using fake datastore stub!!!')
+    try:
+        from fake_datastore import *
+        print('Alert: using fake datastore stub!!!')
+    except ImportError:
+        pass
 
 class FakeTransaction:
     def __enter__(self):
@@ -140,7 +143,8 @@ class DatastoreClient(NosqlClient):
     def delete_many(self, models):
         keys = [k for k in (self.model_key(e) for e in models) if k]
         if keys:
-            self.client.delete_multi(keys)
+            for batch in self.split_batches(keys, 500):
+                self.client.delete_multi(batch)
             return len(keys)
         else:
             return 0
@@ -318,8 +322,12 @@ class DatastoreClient(NosqlClient):
             key = key.decode('utf-8')
         if kind and (isinstance(key, int) or key.isdigit()):
             return self.generate_key(kind, int(key))
-        else:
+        try:
             return Key.from_legacy_urlsafe(key)
+        except Exception:
+            if kind:
+                return self.generate_key(kind, key)
+            raise
 
     def key_to_id(self, key):
         #convert a native key to the string form stored in id/foreign key fields
@@ -339,16 +347,15 @@ class DatastoreClient(NosqlClient):
         query = self.client.query(kind=kind, ancestor=parent_key)
         #query.projection = ['__key__']
         query.keys_only()
-        keys = []
         cursor = None
         while True:
             result = query.fetch(start_cursor=cursor, limit=500)
-            keys.extend([entity.key for entity in result])
+            batch = [entity.key for entity in result]
+            if batch:
+                self.client.delete_multi(batch)
             cursor = result.next_page_token
-            if not cursor:
+            if not cursor or not batch:
                 break
-        if keys:
-            self.client.delete_multi(keys)
 
     def close(self):
         self.client.close()
@@ -439,7 +446,8 @@ class MongoDbClient(NosqlClient):
             else:
                 setattr(inst, field_name, value)
         inst.clear_dirty(list(fields.keys()))
-        return inst.set_id(str(inst._id))
+        db_id = getattr(inst, '_id', getattr(inst, self.db_id_name(), ''))
+        return inst.set_id(str(db_id) if db_id is not None else '')
 
     #make projection dict to fetch some field only
     def build_projection(self, queryObj):
@@ -614,8 +622,10 @@ class RedisDbClient(NosqlClient):
         reverse = any(o.startswith('-') for o in queryObj._order)
 
         cnt = 0
+        prefix_sample = self.build_key(klass, id_='')
+        prefix_bytes = prefix_sample.encode('utf-8') if isinstance(prefix_sample, str) else prefix_sample
         for key, data in self.iter_data(klass, type_='key_data'):
-            data[id_name] = key.rsplit(key_sep, 1)[-1] #set primary key
+            data[id_name] = key[len(prefix_bytes):] if key.startswith(prefix_bytes) else key.rsplit(key_sep, 1)[-1] #set primary key
             if all(self._matches_query(data, flt, fields) for flt in filters):
                 results.append(data)
                 cnt += 1
@@ -749,8 +759,10 @@ class RedisDbClient(NosqlClient):
         if not indexes:
             return #This model have no index required  # pragma: no cover
 
+        prefix_sample = self.build_key(klass, id_='')
+        prefix_bytes = prefix_sample.encode('utf-8') if isinstance(prefix_sample, str) else prefix_sample
         for key, data in self.iter_data(klass, type_='key_data'):
-            id_ = key.rsplit(self.key_sep.encode('utf-8'), 1)[-1]
+            id_ = key[len(prefix_bytes):] if key.startswith(prefix_bytes) else key.rsplit(self.key_sep.encode('utf-8'), 1)[-1]
             for field_name, index in indexes:
                 value = data.get(field_name.encode('utf-8'), None)
                 if value is not None: #index is id set
@@ -763,7 +775,8 @@ class RedisDbClient(NosqlClient):
             for field_name in self.indexes.get(model._meta.name, []):
                 value = getattr(model, field_name, None)
                 if value is not None:
-                    value = model._meta.fields[field_name].db_value(value).decode('utf-8')
+                    value = model._meta.fields[field_name].db_value(value)
+                    value = value.decode('utf-8') if isinstance(value, bytes) else str(value)
                     index = self.build_key(model, index=(field_name, value))
                     self.redis.srem(index, id_)
         else: #drop the whole index of table

@@ -136,9 +136,19 @@ class DeleteQueryBuilder(QueryBuilder):
         #consume the whole result first, the cascade deletes below may hit the same kind
         models = list(super().execute())
         for m in models:
-            #delete on cascade
-            for field in [f for f in m._meta.backref.values() if f.on_delete]:
-                field.model.delete().where(field == m).execute()
+            m_id = m.get_id()
+            if m_id is not None and m_id != '':
+                #foreign keys on delete
+                for field in [f for f in m._meta.backref.values() if f.on_delete]:
+                    mode = field.on_delete.upper() if isinstance(field.on_delete, str) else 'CASCADE'
+                    if mode in ('RESTRICT', 'PROTECT'):
+                        if field.model.select().where(field == m_id).count():
+                            raise ValueError(f'Cannot delete "{m._meta.name}" instance: '
+                                f'referenced by "{field.model.__name__}.{field.name}"')
+                    elif mode == 'SET_NULL':
+                        field.model.update({field: None}).where(field == m_id).execute()
+                    else:
+                        field.model.delete().where(field == m_id).execute()
 
         return self.client.delete_many(models)
 

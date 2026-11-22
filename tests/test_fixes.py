@@ -194,3 +194,65 @@ class TestDataQueries(ModelTestCase):
     def test_pk_comparison_with_none(self):
         with self.assertRaisesCtx(ValueError):
             FixUser.id == None #pylint: disable=comparison-with-callable
+
+    def test_get_none_returns_none(self):
+        self.assertIsNone(FixUser.get(None))
+
+    def test_delete_query_builder_respects_on_delete(self):
+        class CascadeParent(TestModel):
+            title = CharField()
+        class CascadeChildSetNull(TestModel):
+            parent = ForeignKeyField(CascadeParent, on_delete='SET_NULL', null=True)
+            info = CharField()
+        class CascadeChildRestrict(TestModel):
+            parent = ForeignKeyField(CascadeParent, on_delete='RESTRICT')
+            info = CharField()
+
+        CascadeParent.bind(self.database)
+        CascadeChildSetNull.bind(self.database)
+        CascadeChildRestrict.bind(self.database)
+
+        # Test SET_NULL with DeleteQueryBuilder
+        p1 = CascadeParent.create(title='p1')
+        c1 = CascadeChildSetNull.create(parent=p1, info='c1')
+        CascadeParent.delete().where(CascadeParent.id == p1.id).execute()
+        self.assertIsNone(CascadeParent.get_by_id(p1.id))
+        c1_reloaded = CascadeChildSetNull.get_by_id(c1.id)
+        self.assertIsNotNone(c1_reloaded)
+        self.assertIsNone(c1_reloaded._data.get('parent'))
+
+        # Test RESTRICT with DeleteQueryBuilder
+        p2 = CascadeParent.create(title='p2')
+        c2 = CascadeChildRestrict.create(parent=p2, info='c2')
+        with self.assertRaisesCtx(ValueError):
+            CascadeParent.delete().where(CascadeParent.id == p2.id).execute()
+        self.assertIsNotNone(CascadeParent.get_by_id(p2.id))
+
+    def test_foreign_key_with_zero_id(self):
+        class ZeroParent(TestModel):
+            name = CharField()
+        class ZeroChild(TestModel):
+            parent = ForeignKeyField(ZeroParent, null=False)
+        ZeroParent.bind(self.database)
+        ZeroChild.bind(self.database)
+
+        zc = ZeroChild()
+        zc.parent = 0
+        self.assertEqual(zc._data['parent'], 0)
+
+    def test_unattached_model_operations(self):
+        import weedata
+        class StrayModel(weedata.Model):
+            name = CharField()
+        sm = StrayModel(name='ghost')
+        with self.assertRaisesCtx(ValueError):
+            sm.save()
+        with self.assertRaisesCtx(ValueError):
+            StrayModel.create_table()
+        sm.clear_dirty('name') # must not crash with AttributeError
+
+    def test_id_with_colon_not_truncated(self):
+        u = FixUser.create(id='test:prefix:456', name='colon_man', age=42)
+        found = FixUser.get(FixUser.name == 'colon_man')
+        self.assertEqual(found.id, u.id)
+        self.assertIn('test:prefix:456', found.id)

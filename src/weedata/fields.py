@@ -102,7 +102,7 @@ class ForeignKeyDescriptor(FieldDescriptor):
     def get_object_or_id(self, instance):
         field_name = self.field_name
         foreign_id = instance._data.get(field_name)
-        if foreign_id:
+        if foreign_id is not None and foreign_id != '':
             obj = instance._obj_cache.get(field_name, None)
             if not obj:
                 obj = self.foreign_model.get_by_id(foreign_id)
@@ -124,7 +124,7 @@ class ForeignKeyDescriptor(FieldDescriptor):
                 raise ValueError(f'Trying to set a "{type(value).__name__}" instance '
                     f'to the foreign key "{field_name}"')
             foreign_key = value.get_id()
-            if not foreign_key:
+            if foreign_key is None or foreign_key == '':
                 raise DoesNotExist(f'Foreign key {field_name} is null')
             instance._data[field_name] = foreign_key
             instance._obj_cache[field_name] = value

@@ -141,6 +141,8 @@ class Model(object, metaclass=BaseModel):
 
     @classmethod
     def get(cls, *query, **filters):
+        if len(query) == 1 and query[0] is None:
+            return None
         sq = cls.select()
         if query:
             # Handle simple lookup using just the primary key.
@@ -195,6 +197,8 @@ class Model(object, metaclass=BaseModel):
         return cls.delete().filter_by_id(pk).execute()
 
     def save(self, **kwargs):
+        if self.client is None:
+            raise ValueError(f'Model "{self._meta.name}" is not bound to a database client')
         for field in self._meta.fields.values():
             if isinstance(field, ForeignKeyField) and (not field.null) \
                     and (self._data.get(field.name) is None):
@@ -202,8 +206,10 @@ class Model(object, metaclass=BaseModel):
         return self.client.update_one(self)
 
     def delete_instance(self, **kwargs):
+        if self.client is None:
+            raise ValueError(f'Model "{self._meta.name}" is not bound to a database client')
         self_id = self.get_id()
-        if self_id:
+        if self_id is not None and self_id != '':
             #foreign keys on delete
             for field in [f for f in self._meta.backref.values() if f.on_delete]:
                 mode = field.on_delete.upper() if isinstance(field.on_delete, str) else 'CASCADE'
@@ -267,13 +273,16 @@ class Model(object, metaclass=BaseModel):
     #instead return a success message indicating "all indexes already exist"
     @classmethod
     def create_table(cls, **kwargs):
+        if cls._meta.client is None:
+            raise ValueError(f'Model "{cls._meta.name}" is not bound to a database client')
         for name, field in cls._meta.fields.items():
             if field.index or field.unique:
                 cls._meta.client.create_index(cls, name, unique=field.unique, background=True)
 
     def clear_dirty(self, field_name):
         field_name = field_name if isinstance(field_name, list) else [field_name]
-        excluded = ['__key__', '_id', self.client.db_id_name()]
+        id_name = self.client.db_id_name() if self.client else self._meta.primary_key
+        excluded = ['__key__', '_id', id_name]
         for name in field_name:
             if name not in excluded:
                 self._dirty[name] = False

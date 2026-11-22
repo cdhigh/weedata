@@ -91,7 +91,13 @@ class Key:
     _id_sn = 0
     def __init__(self, name, identifier=None, parent=None):
         self.name = name
-        self.identifier = int(identifier or self.next_key_id())
+        if identifier is None:
+            self.identifier = self.next_key_id()
+        else:
+            try:
+                self.identifier = int(identifier)
+            except (ValueError, TypeError):
+                self.identifier = str(identifier)
         self.parent = parent
     
     @classmethod
@@ -103,7 +109,9 @@ class Key:
         return str(self).encode()
 
     def __str__(self):
-        return f'{self.name}:{self.identifier:06d}:KEY'
+        if isinstance(self.identifier, int):
+            return f'{self.name}:{self.identifier:06d}:KEY'
+        return f'{self.name}:{self.identifier}:KEY'
 
     def __eq__(self, other):
         return ((other.__class__ == self.__class__) and (other.name == self.name) and 
@@ -114,11 +122,16 @@ class Key:
 
     @classmethod
     def from_legacy_urlsafe(cls, key):
+        if isinstance(key, bytes):
+            key = key.decode('utf-8')
         if isinstance(key, str):
-            n, i, k = key.split(':')
-            return Key(n, i)
-        else:
-            return key
+            parts = key.split(':')
+            if len(parts) >= 3 and parts[-1] == 'KEY':
+                n = parts[0]
+                i = ':'.join(parts[1:-1])
+                return Key(n, i)
+            raise ValueError(f'Invalid legacy urlsafe key: {key}')
+        return key
 
     def __getstate__(self): #pickling
         return (self.name, self.identifier, self.parent)
@@ -138,7 +151,8 @@ class DBQuery:
         results = []
         cnt = 0
         for key, data in dbJson.items():
-            n, i, k = key.split(':')
+            parts = key.split(':')
+            n = parts[0]
             if n != self.kind: #key第一段是kind
                 continue
             for ft in self.filters:
